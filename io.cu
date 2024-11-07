@@ -266,7 +266,7 @@ void copyMeta(cpuGraph *query, cpuGraph *data)
 {
 	NUM_VQ = query->num_v;
 	NUM_EQ = query->num_e;
-	NUM_VLQ = query->largest_l;
+	NUM_VLQ = query->largest_l + 1;
 
 	// make sure that label corresponding to max_l_freq appears in the query graph.
 	// labels that not in the query are invalid, useless.

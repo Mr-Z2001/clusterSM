@@ -170,9 +170,11 @@ encodingMeta::encodingMeta()
   // combine
   combine_cnt = 0;
   combine_clusters_other_ = nullptr;
-  combine_cluster_in_ = nullptr;
   combine_cluster_out_ = nullptr;
   combine_type_ = nullptr;
+
+  combine_checkpoints_ = new int[MAX_LAYERS];
+  combine_checkpoints_[0] = -1;
 }
 
 encodingMeta::~encodingMeta()
@@ -204,8 +206,6 @@ encodingMeta::~encodingMeta()
   // combine
   if (combine_clusters_other_)
     delete[] combine_clusters_other_;
-  if (combine_cluster_in_)
-    delete[] combine_cluster_in_;
   if (combine_cluster_out_)
     delete[] combine_cluster_out_;
   if (combine_type_)

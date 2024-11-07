@@ -81,7 +81,7 @@ struct encodingMeta
 	// combine
 	numtype combine_cnt;
 	numtype *combine_cluster_out_;
-	numtype *combine_cluster_in_;
+	int *combine_checkpoints_;
 	std::set<int> *combine_clusters_other_;
 	int *combine_type_; // 0 means new, 1 means use old.
 

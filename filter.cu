@@ -348,101 +348,120 @@ void clustering(
         }
       }
     }
-    num_actual_new_clusters = num_new_clusters;
 
     // combine
-    for (int new_cluster_out_ptr = num_clusters; new_cluster_out_ptr < num_clusters + num_new_clusters; ++new_cluster_out_ptr)
+
+    layer_index++;
+    num_actual_new_clusters = num_new_clusters;
+    enc_meta->combine_checkpoints_[layer_index] = enc_meta->num_clusters + num_new_clusters;
+
+    uint32_t &comb_cnt = enc_meta->combine_cnt;
+
+    for (int new_cluster_out_ptr = num_clusters; new_cluster_out_ptr < num_clusters + num_new_clusters; ++new_cluster_out_ptr) // iterate on new clusters out
     {
       if (enc_meta->is_a_valid_cluster_[new_cluster_out_ptr] == false)
         continue;
       cpuCluster &cluster_out = cpu_clusters_[new_cluster_out_ptr];
       vtype core_u_out = cluster_out.query_us_[0];
 
+      bool duplicate = false; // is the `core_u_out` the unique core in this layer?
+
       // scan for the inner, combine all clusters that have the same core vertex.
-      std::set<int> to_combine_cluster_index;
-      to_combine_cluster_index.insert(new_cluster_out_ptr);
-      std::set<vtype> core_nbrs;
-      for (int i = 1; i < cpu_clusters_[new_cluster_out_ptr].num_query_us[0]; ++i)
-        core_nbrs.insert(cpu_clusters_[new_cluster_out_ptr].query_us_[i]);
-      for (int new_cluster_inner_ptr = new_cluster_out_ptr + 1; new_cluster_inner_ptr < *num_clusters + num_new_clusters; ++new_cluster_inner_ptr)
+      std::set<int> to_combine_cluster_index_set;
+      to_combine_cluster_index_set.insert(new_cluster_out_ptr);
+      std::set<vtype> core_nbrs_set;
+      for (int i = 1; i < cluster_out.num_query_us; ++i)
+        core_nbrs_set.insert(cluster_out.query_us_[i]);
+
+      for (int new_cluster_in_ptr = new_cluster_out_ptr + 1; new_cluster_in_ptr < num_clusters + num_new_clusters; ++new_cluster_in_ptr) // iterate on new clusters in
       {
-        if (enc_meta->is_a_valid_cluster_[new_cluster_inner_ptr] == false)
+        if (enc_meta->is_a_valid_cluster_[new_cluster_in_ptr] == false)
           continue;
-        if (cpu_clusters_[new_cluster_inner_ptr].query_us_[0] == core_u_out)
+
+        cpuCluster &cluster_in = cpu_clusters_[new_cluster_in_ptr];
+        vtype core_u_in = cluster_in.query_us_[0];
+
+        if (core_u_in == core_u_out)
         {
-          to_combine_cluster_index.insert(new_cluster_inner_ptr);
-          for (int i = 1; i < cpu_clusters_[new_cluster_inner_ptr].num_query_us[0]; ++i)
-            core_nbrs.insert(cpu_clusters_[new_cluster_inner_ptr].query_us_[i]);
+          duplicate = true;
+          to_combine_cluster_index_set.insert(new_cluster_in_ptr);
+          for (int i = 1; i < cluster_in.num_query_us; ++i)
+            core_nbrs_set.insert(cluster_in.query_us_[i]);
         }
       }
+
+      if (!duplicate)
+        continue;
+
       bool if_create_new = true;
-      auto set_iterator = to_combine_cluster_index.begin();
+      auto set_iterator = to_combine_cluster_index_set.begin();
       while (if_create_new &&
-             (set_iterator != to_combine_cluster_index.end()))
+             (set_iterator != to_combine_cluster_index_set.end()))
       {
-        int num_query_us = cpu_clusters_[*set_iterator].num_query_us[0];
-        if_create_new = if_create_new && (num_query_us != core_nbrs.size() + 1);
+        int num_query_us = cpu_clusters_[*set_iterator].num_query_us;
+        if_create_new = if_create_new && (num_query_us != core_nbrs_set.size() + 1);
         set_iterator++;
       }
       int largest_cluster_index;
-      extendArray(enc_meta->combine_type_, enc_meta->combine_cnt);
+      extendArray(enc_meta->combine_type_, comb_cnt);
+
       if (!if_create_new) // There exists a cluster contains all.
       {
         set_iterator--;
         largest_cluster_index = *set_iterator;
-        to_combine_cluster_index.erase(largest_cluster_index);
-        enc_meta->combine_type_[enc_meta->combine_cnt] = 1;
+        to_combine_cluster_index_set.erase(largest_cluster_index);
+        enc_meta->combine_type_[comb_cnt] = 1;
       }
       else // create new cluster. no cluster contains all others.
       {
-        extendArray(cpu_clusters_, *num_clusters + num_new_clusters);
-        extendArray(enc_meta->is_a_valid_cluster_, *num_clusters + num_new_clusters);
         num_new_clusters++;
-        enc_meta->combine_type_[enc_meta->combine_cnt] = 0;
+        num_actual_new_clusters++;
+        enc_meta->combine_type_[comb_cnt] = 0;
 
-        enc_meta->is_a_valid_cluster_[*num_clusters + num_new_clusters - 1] = true;
-        auto &new_cluster = cpu_clusters_[*num_clusters + num_new_clusters - 1];
-        new_cluster.num_query_us[0] = core_nbrs.size() + 1;
-        new_cluster.query_us_ = new vtype[new_cluster.num_query_us[0]];
+        int new_index = num_clusters + num_new_clusters - 1;
+
+        enc_meta->is_a_valid_cluster_[new_index] = true;
+        cpuCluster &new_cluster = cpu_clusters_[new_index];
+        new_cluster.num_query_us = core_nbrs_set.size() + 1;
+        new_cluster.query_us_ = new vtype[new_cluster.num_query_us];
         new_cluster.query_us_[0] = core_u_out;
         int i = 1;
-        for (auto core_nbr : core_nbrs)
+        for (auto core_nbr : core_nbrs_set)
           new_cluster.query_us_[i++] = core_nbr;
 
-        largest_cluster_index = *num_clusters + num_new_clusters - 1;
+        largest_cluster_index = new_index;
 
 #ifndef NDEBUG
         std::cout << "new cluster combine: ";
-        std::cout << "num query us: " << cpu_clusters_[*num_clusters + num_new_clusters - 1].num_query_us[0] << " ";
-        for (int k = 0; k < cpu_clusters_[*num_clusters + num_new_clusters - 1].num_query_us[0]; k++)
-          std::cout << cpu_clusters_[*num_clusters + num_new_clusters - 1].query_us_[k] << " ";
+        std::cout << "num query us: " << new_cluster.num_query_us << " ";
+        for (int k = 0; k < new_cluster.num_query_us; k++)
+          std::cout << new_cluster.query_us_[k] << " ";
         std::cout << std::endl;
 #endif
       }
 
-      set_iterator = to_combine_cluster_index.begin();
-      extendArray(enc_meta->combine_cluster_out_, enc_meta->combine_cnt);
-      extendArray(enc_meta->combine_clusters_other_, enc_meta->combine_cnt);
-      enc_meta->combine_cluster_out_[enc_meta->combine_cnt] = largest_cluster_index;
-      enc_meta->combine_clusters_other_[enc_meta->combine_cnt] = to_combine_cluster_index;
+      set_iterator = to_combine_cluster_index_set.begin();
+      extendArray(enc_meta->combine_cluster_out_, comb_cnt);
+      extendArray(enc_meta->combine_clusters_other_, comb_cnt);
+      enc_meta->combine_cluster_out_[comb_cnt] = largest_cluster_index;
+      enc_meta->combine_clusters_other_[comb_cnt] = to_combine_cluster_index_set;
 
-      num_actual_new_clusters -= to_combine_cluster_index.size();
-      while (set_iterator != to_combine_cluster_index.end())
+      num_actual_new_clusters -= to_combine_cluster_index_set.size();
+      while (set_iterator != to_combine_cluster_index_set.end())
       {
         enc_meta->is_a_valid_cluster_[*set_iterator] = false;
         set_iterator++;
       }
-      enc_meta->combine_cnt++;
+      comb_cnt++;
     }
 
-    layer_index++;
-    *num_clusters += num_new_clusters;
+    num_clusters += num_new_clusters;
     num_clusters_per_layer_[layer_index] = num_new_clusters;
-    std::cout << "layer " << layer_index << " num_clusters: " << *num_clusters << std::endl;
+    std::cout << "layer " << layer_index << " num_clusters: " << num_clusters << std::endl;
   } while (num_actual_new_clusters > 1);
 
   // construct meta
-  enc_meta->init(*num_clusters, cpu_clusters_);
+  enc_meta->init(cpu_clusters_);
   enc_meta->num_layers = layer_index;
   enc_meta->num_clusters_per_layer_ = new numtype[enc_meta->num_layers];
   memcpy(enc_meta->num_clusters_per_layer_, num_clusters_per_layer_, sizeof(numtype) * enc_meta->num_layers);
@@ -552,7 +571,7 @@ oneRoundFilterBidirectionKernel(
     offtype *d_offsets_, vtype *d_nbrs_, vltype *d_v_labels_, degtype *d_v_degrees_,
 
     uint32_t *d_bitmap_, size_t bitmap_pitch,
-    uint32_t *d_bitmap_reverse_, size_t bitmap_reverse_pitch,
+    uint32_t *d_bitmap_reverse_,
 
     vtype *d_u_candidate_vs_, numtype *d_num_u_candidate_vs_,
     vtype *d_v_candidate_us_, numtype *d_num_v_candidate_us_,
@@ -573,6 +592,7 @@ oneRoundFilterBidirectionKernel(
   __shared__ uint32_t s_d_nlc_table[WARP_PER_BLOCK][MAX_VLQ];
   __shared__ numtype s_q_nlc_table[MAX_VQ][MAX_VLQ];
   __shared__ uint32_t warp_pos[MAX_VQ][WARP_PER_BLOCK];
+  __shared__ vltype s_d_vlabels_part[WARP_PER_BLOCK][WARP_SIZE];
 
   if (tid < C_NUM_VQ)
   {
@@ -583,41 +603,47 @@ oneRoundFilterBidirectionKernel(
     s_q_nlc_table[tid / C_NUM_VLQ][tid % C_NUM_VLQ] = d_query_nlc_table_[tid];
   if (lid < MAX_VQ)
     warp_pos[lid][wid] = 0;
-  if (lid < MAX_VLQ)
-    s_d_nlc_table[wid][lid] = 0;
   if (lid < MAX_VQ)
     s_bitmap[lid][wid] = 0;
   s_bitmap_reverse[tid] = 0;
+  if (idx < C_NUM_VD)
+    s_d_vlabels_part[wid][lid] = d_v_labels_[idx];
   __syncthreads();
 
   vtype v = wid_g * warpSize;
-  vtype v_end = min(v + 32, C_NUM_VD);
+  vtype v_end = min(v + 32, C_NUM_VD); // exclusive
   while (v < v_end)
   {
     if (lid < C_NUM_VLQ)
       s_d_nlc_table[wid][lid] = 0;
     __syncwarp();
 
+    if (s_d_vlabels_part[wid][v % warpSize] >= C_NUM_VLQ)
+    {
+      ++v;
+      continue;
+    }
+
     // build data nlc table
-    offtype v_nbr_off = d_offsets_[v];
+    offtype v_nbr_off = d_offsets_[v] + lid;
     offtype v_nbr_off_end = d_offsets_[v + 1];
-    offtype my_off = v_nbr_off + lid;
-    while (my_off < v_nbr_off_end)
+    while (v_nbr_off < v_nbr_off_end)
     {
       auto group = cooperative_groups::coalesced_threads();
-      vtype v_nbr = d_nbrs_[my_off];
+      vtype v_nbr = d_nbrs_[v_nbr_off];
       vltype v_nbr_label = d_v_labels_[v_nbr];
       if (v_nbr_label < C_NUM_VLQ)
-        atomicAdd(&s_d_nlc_table[wid][v_nbr_label], 1);
+        atomicAdd(&s_d_nlc_table[wid][v_nbr_label], 1); // `wid` is `v`
       group.sync();
-      my_off += warpSize;
+      v_nbr_off += warpSize;
     }
     __syncwarp();
 
     for (vtype u = 0; u < C_NUM_VQ; ++u)
     {
+      // all lanes take the same branch
       if (s_q_degs[u] <= d_v_degrees_[v] &&
-          s_q_vlabels[u] == d_v_labels_[v])
+          s_q_vlabels[u] == s_d_vlabels_part[wid][v % warpSize])
       {
         // lid == vLabel
         if (lid < C_NUM_VLQ)
@@ -635,13 +661,15 @@ oneRoundFilterBidirectionKernel(
       }
       __syncwarp();
     }
-    v++;
+    ++v;
   }
   __syncwarp();
 
+  // read from shared, write to global memory.
   for (vtype u = 0; u < C_NUM_VQ; ++u)
   {
-    if (s_bitmap[u][wid] & (1 << lid))
+    // lid: v%warpSize
+    if (s_bitmap[u][wid] & (1 << lid)) // if v is a candidate vertex for u
     {
       auto group = cooperative_groups::coalesced_threads();
       int rank = group.thread_rank();
@@ -667,13 +695,13 @@ void oneRoundFilterBidirection(
     cpuGraph *hq, cpuGraph *hg,
     gpuGraph *dq, gpuGraph *dg,
     uint32_t *d_bitmap_, size_t bitmap_pitch,
-    uint32_t *d_bitmap_reverse_, size_t bitmap_reverse_pitch,
+    uint32_t *d_bitmap_reverse_,
 
     vtype *d_u_candidate_vs_, numtype *d_num_u_candidate_vs_,
     vtype *d_v_candidate_us_, numtype *d_num_v_candidate_us_)
 {
   numtype *h_query_nlc = nullptr;
-  cuchk(cudaMallocHost((void **)&h_query_nlc, sizeof(numtype) * NUM_VQ * NUM_VLQ));
+  h_query_nlc = new numtype[NUM_VQ * NUM_VLQ];
   memset(h_query_nlc, 0, sizeof(numtype) * NUM_VQ * NUM_VLQ);
 
   numtype *d_query_nlc = nullptr;
@@ -690,15 +718,20 @@ void oneRoundFilterBidirection(
     }
   }
 
+  cuchk(cudaMemcpy(d_query_nlc, h_query_nlc, sizeof(numtype) * NUM_VQ * NUM_VLQ, cudaMemcpyHostToDevice));
+
   oneRoundFilterBidirectionKernel<<<GRID_DIM, BLOCK_DIM>>>(
       dq->vLabels_, dq->degree_,
       dg->offsets_, dg->neighbors_, dg->vLabels_, dg->degree_,
       d_bitmap_, bitmap_pitch,
-      d_bitmap_reverse_, bitmap_reverse_pitch,
+      d_bitmap_reverse_,
       d_u_candidate_vs_, d_num_u_candidate_vs_,
       d_v_candidate_us_, d_num_v_candidate_us_,
       d_query_nlc);
   cuchk(cudaDeviceSynchronize());
+
+  cuchk(cudaFree(d_query_nlc));
+  delete[] h_query_nlc;
 }
 
 void oneRoundFilterReverse(
@@ -745,6 +778,7 @@ __global__ void
 encodeKernel(
     // graph info
     offtype *d_offsets_, vtype *d_nbrs_,
+
     // candidate vertices
     vtype core_u, uint32_t layer_index, uint32_t cluster_index,
     vtype *d_u_candidate_vs_, numtype *d_num_u_candidate_vs_,
@@ -772,7 +806,7 @@ encodeKernel(
 
   __shared__ vtype s_core_v[WARP_PER_BLOCK];
 
-  if (wid_g < d_num_u_candidate_vs_[core_u])
+  if (wid_g < d_num_u_candidate_vs_[core_u]) // one warp one cluster.
   {
     if (lid == 0)
       s_core_v[wid] = d_u_candidate_vs_[core_u * C_MAX_L_FREQ + wid_g];
@@ -793,6 +827,7 @@ encodeKernel(
   offtype nbr_off = d_offsets_[core_v] + lid;
   while (nbr_off < d_offsets_[core_v + 1])
   {
+    auto group = cooperative_groups::coalesced_threads();
     vtype v_nbr = d_nbrs_[nbr_off];
     for (int i = 1; i < enc_num_query_us_[cluster_index]; ++i)
     {
@@ -800,7 +835,7 @@ encodeKernel(
       // TODO: optimize using bitmap. fast check.
       if (d_v_candidate_us_[v_nbr] & (1 << tobe_map_u))
         atomicOr(&encodings_[v_nbr * enc_num_bytes + (enc_pos + i) / 32], 1 << ((enc_pos + i) % 32));
-      __syncwarp();
+      group.sync();
     }
     nbr_off += warpSize;
   }
@@ -896,12 +931,14 @@ mergeKernel(
 
 __global__ void
 combineMultipleClustersKernel(
+    offtype *d_offsets_, vtype *d_nbrs_,
     vtype core_u, bool combine_type,
     int big_cluster, int *small_clusters_arr_, int num_small_clusters,
     uint32_t *d_encodings_,
     numtype num_clusters, numtype *num_query_us_,
     numtype num_total_us, numtype num_bytes,
-    vtype *query_us_compact_, offtype *cluster_offsets_)
+    vtype *query_us_compact_, offtype *cluster_offsets_,
+    vtype *d_u_candidate_vs_, numtype *d_num_u_candidate_vs_)
 {
   int tid = threadIdx.x;
   int bid = blockIdx.x;
@@ -910,66 +947,95 @@ combineMultipleClustersKernel(
   int lid = tid % warpSize;
   int wid_g = idx / warpSize;
 
-  __shared__ bool s_combine_type[1];
-  __shared__ int s_big_pos[1];
+  __shared__ bool s_combine_type;
+  __shared__ int s_big_pos;
   __shared__ int s_small_pos[32]; // I guess 32 is enough. Need test is for larger graphs.
+  __shared__ vtype s_warp_v[WARP_PER_BLOCK];
 
   if (tid == 0)
-    s_combine_type[0] = combine_type;
+    s_combine_type = combine_type;
   if (tid == 0)
-    s_big_pos[0] = cluster_offsets_[big_cluster];
+    s_big_pos = cluster_offsets_[big_cluster];
   if (tid < num_small_clusters)
     s_small_pos[tid] = cluster_offsets_[small_clusters_arr_[tid]];
   __syncthreads();
 
-  vtype v = idx;
-  if (v >= C_NUM_VD)
-    v = UINT32_MAX;
+  // TODO: only pick core_u's candidates.
+  if (wid_g < d_num_u_candidate_vs_[core_u])
+    if (lid == 0)
+      s_warp_v[wid] = d_u_candidate_vs_[core_u * C_MAX_L_FREQ + wid_g];
   __syncwarp();
 
-  if (wid_g * warpSize >= C_NUM_VD)
-    return;
-
-  for (int i = 0; i < num_query_us_[big_cluster]; ++i)
+  // combine core_v
+  if (lid < num_small_clusters) // one lid, one small cluster.core_u position.
   {
-    int target_pos = s_big_pos[0] + i;
-    vtype target_u = query_us_compact_[target_pos];
-    int final_value = 1;
-    for (int small_cluster_index = 0; small_cluster_index < num_small_clusters; ++small_cluster_index)
+    auto group = cooperative_groups::coalesced_threads();
+    int small_pos = s_small_pos[lid];
+    int big_pos = s_big_pos;
+    int enc = 1;
+    enc = enc && (d_encodings_[s_warp_v[wid] * num_bytes + small_pos / 32] & (1 << (small_pos % 32)));
+
+    uint32_t mask = group.all(enc);
+    if (mask)
     {
-      int small_pos = s_small_pos[small_cluster_index];
-      while (small_pos < s_small_pos[small_cluster_index] + num_query_us_[small_clusters_arr_[small_cluster_index]])
-      {
-        if (target_u == query_us_compact_[small_pos])
-        {
-          if (v != UINT32_MAX)
-            final_value &= (d_encodings_[v * num_bytes + small_pos / 32] & (1 << (small_pos % 32)));
-          __syncwarp();
-          break;
-        }
-        small_pos++;
-      }
+      if (s_combine_type == 1) // old cluster.
+        d_encodings_[s_warp_v[wid] * num_bytes + big_pos / 32] &= 1 << (big_pos % 32);
+      else // new cluster
+        d_encodings_[s_warp_v[wid] * num_bytes + big_pos / 32] |= 1 << (big_pos % 32);
     }
-    // no warp divergence here, all the threads take the same path.
-    if (v != UINT32_MAX)
+  }
+
+  // combine core_v_nbrs
+
+  offtype v_nbr_off = d_offsets_[s_warp_v[wid]] + lid;
+  offtype v_nbr_off_end = d_offsets_[s_warp_v[wid] + 1];
+  while (v_nbr_off < v_nbr_off_end)
+  {
+    auto group = cooperative_groups::coalesced_threads();
+    vtype v = d_nbrs_[v_nbr_off];
+    for (int i = 1; i < num_query_us_[big_cluster]; ++i)
     {
-      if (s_combine_type[0] == 1)
+      int target_pos = s_big_pos + i;
+      vtype target_u = query_us_compact_[target_pos];
+      int final_value = 1;
+      for (int small_cluster_index = 0; small_cluster_index < num_small_clusters; ++small_cluster_index)
+      {
+        int small_pos = s_small_pos[small_cluster_index];
+        while (small_pos < s_small_pos[small_cluster_index] + num_query_us_[small_clusters_arr_[small_cluster_index]])
+        {
+          if (target_u == query_us_compact_[small_pos])
+          {
+            final_value = final_value && (d_encodings_[v * num_bytes + small_pos / 32] & (1 << (small_pos % 32)));
+            break;
+          }
+          small_pos++;
+        }
+        if (!final_value)
+          break;
+      }
+      group.sync();
+      // no warp divergence here, all the threads take the same path.
+      if (s_combine_type == 1)
         d_encodings_[v * num_bytes + target_pos / 32] &= final_value << (target_pos % 32);
       else
         d_encodings_[v * num_bytes + target_pos / 32] |= final_value << (target_pos % 32);
     }
+
+    v_nbr_off += warpSize;
   }
 }
 
 void encode(
     gpuGraph *dg,
-    cpuCluster *cpu_clusters_, gpuCluster *gpu_clusters_, numtype num_clusters,
-    uint32_t *h_encodings_, uint32_t *d_encodings_, encodingMeta *encoding_meta,
-    numtype num_layers, numtype *num_clusters_per_layer,
+    cpuCluster *cpu_clusters_, gpuCluster *gpu_clusters_,
+    uint32_t *h_encodings_, uint32_t *d_encodings_, encodingMeta *enc_meta,
     vtype *d_u_candidate_vs_, numtype *d_num_u_candidate_vs_,
     vtype *d_v_candidate_us_, numtype *d_num_v_candidate_us_)
 {
+  // TODO: organize as a gpu_encoding_meta class.
   // device encoding meta
+  uint32_t *enc_meta_buffer_;
+
   numtype *enc_d_num_query_us_;
   vtype *enc_d_query_us_compact_;
   offtype *enc_d_cluster_offsets_;
@@ -979,32 +1045,54 @@ void encode(
   vtype *enc_d_merged_cluster_vertex_;
   numtype *enc_d_merged_cluster_layer_;
 
-  // TODO: 合并内存分配，一次cudaMalloc()，然后用指针指一下。
-  cuchk(cudaMalloc((void **)&enc_d_num_query_us_, sizeof(numtype) * encoding_meta->num_clusters));
-  cuchk(cudaMemcpy(enc_d_num_query_us_, encoding_meta->num_query_us_, sizeof(numtype) * encoding_meta->num_clusters, cudaMemcpyHostToDevice));
+  uint32_t tot_mem_cnt = 0;
+  tot_mem_cnt += enc_meta->num_clusters;
+  tot_mem_cnt += enc_meta->num_total_us;
+  tot_mem_cnt += enc_meta->num_clusters + 1;
+  tot_mem_cnt += enc_meta->num_layers;
+  tot_mem_cnt += enc_meta->merge_count;
+  tot_mem_cnt += enc_meta->merge_count;
+  tot_mem_cnt += enc_meta->merge_count;
+  tot_mem_cnt += enc_meta->merge_count;
+  tot_mem_cnt *= sizeof(uint32_t);
 
-  cuchk(cudaMalloc((void **)&enc_d_query_us_compact_, sizeof(vtype) * encoding_meta->num_total_us));
-  cuchk(cudaMemcpy(enc_d_query_us_compact_, encoding_meta->query_us_compact_, sizeof(vtype) * encoding_meta->num_total_us, cudaMemcpyHostToDevice));
+  cuchk(cudaMalloc((void **)&enc_meta_buffer_, tot_mem_cnt));
+  uint32_t *current_ptr = enc_meta_buffer_;
 
-  cuchk(cudaMalloc((void **)&enc_d_cluster_offsets_, sizeof(offtype) * (encoding_meta->num_clusters + 1)));
-  cuchk(cudaMemcpy(enc_d_cluster_offsets_, encoding_meta->cluster_offsets_, sizeof(offtype) * (encoding_meta->num_clusters + 1), cudaMemcpyHostToDevice));
+  enc_d_num_query_us_ = current_ptr;
+  cuchk(cudaMemcpy(enc_d_num_query_us_, enc_meta->num_query_us_, sizeof(numtype) * enc_meta->num_clusters, cudaMemcpyHostToDevice));
+  current_ptr += enc_meta->num_clusters;
 
-  cuchk(cudaMalloc((void **)&enc_d_clusters_per_layer_, sizeof(numtype) * num_layers));
-  cuchk(cudaMemcpy(enc_d_clusters_per_layer_, num_clusters_per_layer, sizeof(numtype) * num_layers, cudaMemcpyHostToDevice));
+  enc_d_query_us_compact_ = current_ptr;
+  cuchk(cudaMemcpy(enc_d_query_us_compact_, enc_meta->query_us_compact_, sizeof(vtype) * enc_meta->num_total_us, cudaMemcpyHostToDevice));
+  current_ptr += enc_meta->num_total_us;
 
-  cuchk(cudaMalloc((void **)&enc_d_merged_cluster_left_, sizeof(numtype) * encoding_meta->merge_count));
-  cuchk(cudaMemcpy(enc_d_merged_cluster_left_, encoding_meta->merged_cluster_left_, sizeof(numtype) * encoding_meta->merge_count, cudaMemcpyHostToDevice));
+  enc_d_cluster_offsets_ = current_ptr;
+  cuchk(cudaMemcpy(enc_d_cluster_offsets_, enc_meta->cluster_offsets_, sizeof(offtype) * (enc_meta->num_clusters + 1), cudaMemcpyHostToDevice));
+  current_ptr += (enc_meta->num_clusters + 1);
 
-  cuchk(cudaMalloc((void **)&enc_d_merged_cluster_right_, sizeof(numtype) * encoding_meta->merge_count));
-  cuchk(cudaMemcpy(enc_d_merged_cluster_right_, encoding_meta->merged_cluster_right_, sizeof(numtype) * encoding_meta->merge_count, cudaMemcpyHostToDevice));
+  enc_d_clusters_per_layer_ = current_ptr;
+  cuchk(cudaMemcpy(enc_d_clusters_per_layer_, enc_meta->num_clusters_per_layer_, sizeof(numtype) * enc_meta->num_layers, cudaMemcpyHostToDevice));
+  current_ptr += enc_meta->num_layers;
 
-  cuchk(cudaMalloc((void **)&enc_d_merged_cluster_vertex_, sizeof(vtype) * encoding_meta->merge_count));
-  cuchk(cudaMemcpy(enc_d_merged_cluster_vertex_, encoding_meta->merged_cluster_vertex_, sizeof(vtype) * encoding_meta->merge_count, cudaMemcpyHostToDevice));
+  enc_d_merged_cluster_left_ = current_ptr;
+  cuchk(cudaMemcpy(enc_d_merged_cluster_left_, enc_meta->merged_cluster_left_, sizeof(numtype) * enc_meta->merge_count, cudaMemcpyHostToDevice));
+  current_ptr += enc_meta->merge_count;
 
-  cuchk(cudaMalloc((void **)&enc_d_merged_cluster_layer_, sizeof(numtype) * encoding_meta->merge_count));
-  cuchk(cudaMemcpy(enc_d_merged_cluster_layer_, encoding_meta->merged_cluster_layer_, sizeof(numtype) * encoding_meta->merge_count, cudaMemcpyHostToDevice));
+  enc_d_merged_cluster_right_ = current_ptr;
+  cuchk(cudaMemcpy(enc_d_merged_cluster_right_, enc_meta->merged_cluster_right_, sizeof(numtype) * enc_meta->merge_count, cudaMemcpyHostToDevice));
+  current_ptr += enc_meta->merge_count;
 
-  for (int cluster_index = 0; cluster_index < num_clusters_per_layer[0]; ++cluster_index)
+  enc_d_merged_cluster_vertex_ = current_ptr;
+  cuchk(cudaMemcpy(enc_d_merged_cluster_vertex_, enc_meta->merged_cluster_vertex_, sizeof(vtype) * enc_meta->merge_count, cudaMemcpyHostToDevice));
+  current_ptr += enc_meta->merge_count;
+
+  enc_d_merged_cluster_layer_ = current_ptr;
+  cuchk(cudaMemcpy(enc_d_merged_cluster_layer_, enc_meta->merged_cluster_layer_, sizeof(numtype) * enc_meta->merge_count, cudaMemcpyHostToDevice));
+  current_ptr += enc_meta->merge_count;
+
+  // encode the first layer.
+  for (int cluster_index = 0; cluster_index < enc_meta->num_clusters_per_layer_[0]; ++cluster_index)
   {
     vtype core_u = cpu_clusters_[cluster_index].query_us_[0];
 
@@ -1015,13 +1103,13 @@ void encode(
         d_v_candidate_us_, d_num_v_candidate_us_,
 
         d_encodings_,
-        encoding_meta->num_clusters, enc_d_num_query_us_,
-        encoding_meta->num_total_us, encoding_meta->num_bytes,
+        enc_meta->num_clusters, enc_d_num_query_us_,
+        enc_meta->num_total_us, enc_meta->num_bytes,
         enc_d_query_us_compact_, enc_d_cluster_offsets_,
 
-        encoding_meta->num_layers, enc_d_clusters_per_layer_,
+        enc_meta->num_layers, enc_d_clusters_per_layer_,
 
-        encoding_meta->merge_count,
+        enc_meta->merge_count,
         enc_d_merged_cluster_left_, enc_d_merged_cluster_right_,
         enc_d_merged_cluster_vertex_, enc_d_merged_cluster_layer_);
     cuchk(cudaDeviceSynchronize());
@@ -1032,42 +1120,59 @@ void encode(
 #endif
 
   uint32_t layer_index = 1;
-  uint32_t cluster_sum = num_clusters_per_layer[0];
+  uint32_t cluster_sum = enc_meta->num_clusters_per_layer_[0];
   uint32_t combine_ptr = 0;
 
   int *d_small_clusters_;
-  cuchk(cudaMalloc((void **)&d_small_clusters_, sizeof(int) * encoding_meta->num_clusters));
+  cuchk(cudaMalloc((void **)&d_small_clusters_, sizeof(int) * enc_meta->num_clusters));
 
-  for (int cluster_index = num_clusters_per_layer[0]; cluster_index < encoding_meta->num_clusters; ++cluster_index)
+  /**
+   * from now on, each cluster is
+   * (1) obtained by merging
+   * (2) obtained by combining and that's a new cluster.
+   * if it is obtained by merging,
+   *    do not check if it is still valid.
+   *    do a two-way intersection.
+   * if it is obtained by combining,
+   *    if it is not a new cluster, in-place intersection
+   *    if it is a new cluster, combine.
+   */
+  for (int cluster_index = enc_meta->num_clusters_per_layer_[0]; cluster_index < enc_meta->num_clusters; ++cluster_index)
   {
-    if (cluster_index == cluster_sum + num_clusters_per_layer[layer_index])
+    if (cluster_index == enc_meta->combine_checkpoints_[layer_index])
     {
-      cluster_sum += num_clusters_per_layer[layer_index];
-      layer_index++;
-
       // combine
-      if (encoding_meta->combine_cnt != 0)
+      if (enc_meta->combine_cnt != 0)
       {
-        while (encoding_meta->combine_cluster_out_[combine_ptr] <= cluster_index)
+        while (enc_meta->combine_cluster_out_[combine_ptr] < cluster_index)
         {
-          int big_cluster = encoding_meta->combine_cluster_out_[combine_ptr];
-          std::set<int> small_clusters = encoding_meta->combine_clusters_other_[combine_ptr];
+          int big_cluster = enc_meta->combine_cluster_out_[combine_ptr];
+          std::set<int> small_clusters = enc_meta->combine_clusters_other_[combine_ptr];
 
           std::vector<int> small_clusters_vec = std::vector<int>(small_clusters.begin(), small_clusters.end());
           int *small_clusters_arr = small_clusters_vec.data();
           int num_small_clusters = small_clusters.size();
+
+          if (num_small_clusters > 32)
+          {
+            std::cerr << "encoding: combing: num small cluster: " << num_small_clusters << std::endl;
+            std::cerr << "too many small clusters" << std::endl;
+            exit(1);
+          }
 
           cuchk(cudaMemcpy(d_small_clusters_, small_clusters_arr, sizeof(int) * num_small_clusters, cudaMemcpyHostToDevice));
 
           vtype core_u = cpu_clusters_[big_cluster].query_us_[0];
 
           combineMultipleClustersKernel<<<GRID_DIM, BLOCK_DIM>>>(
-              core_u, encoding_meta->combine_type_[combine_ptr],
+              dg->offsets_, dg->neighbors_,
+              core_u, enc_meta->combine_type_[combine_ptr],
               big_cluster, d_small_clusters_, num_small_clusters,
               d_encodings_,
-              encoding_meta->num_clusters, enc_d_num_query_us_,
-              encoding_meta->num_total_us, encoding_meta->num_bytes,
-              enc_d_query_us_compact_, enc_d_cluster_offsets_);
+              enc_meta->num_clusters, enc_d_num_query_us_,
+              enc_meta->num_total_us, enc_meta->num_bytes,
+              enc_d_query_us_compact_, enc_d_cluster_offsets_,
+              d_u_candidate_vs_, d_num_u_candidate_vs_);
           cuchk(cudaDeviceSynchronize());
           ++combine_ptr;
         }
@@ -1076,52 +1181,60 @@ void encode(
 #endif
       }
     }
-    if (encoding_meta->is_a_valid_cluster_[cluster_index] == false)
-      continue;
+
+    if (cluster_index == cluster_sum + enc_meta->num_clusters_per_layer_[layer_index])
+    {
+      cluster_sum += enc_meta->num_clusters_per_layer_[layer_index];
+      layer_index++;
+    }
+
+    //? what is it?
+    // if (enc_meta->is_a_valid_cluster_[cluster_index] == false)
+    //   continue;
     vtype core_u = cpu_clusters_[cluster_index].query_us_[0];
 
     // merge clusters.
-    int merge_index = cluster_index - num_clusters_per_layer[0];
-    int left = encoding_meta->merged_cluster_left_[merge_index];
-    int left_position = encoding_meta->cluster_offsets_[left];
-    while (encoding_meta->query_us_compact_[left_position] != core_u)
+    int merge_index = cluster_index - enc_meta->num_clusters_per_layer_[0];
+    int left = enc_meta->merged_cluster_left_[merge_index];
+    int left_position = enc_meta->cluster_offsets_[left];
+    while (enc_meta->query_us_compact_[left_position] != core_u)
       left_position++;
-    int right = encoding_meta->merged_cluster_right_[merge_index];
-    int right_position = encoding_meta->cluster_offsets_[right];
-    while (encoding_meta->query_us_compact_[right_position] != core_u)
+    int right = enc_meta->merged_cluster_right_[merge_index];
+    int right_position = enc_meta->cluster_offsets_[right];
+    while (enc_meta->query_us_compact_[right_position] != core_u)
       right_position++;
-    vtype vertex = encoding_meta->merged_cluster_vertex_[merge_index];
-    int layer = encoding_meta->merged_cluster_layer_[merge_index];
+    vtype vertex = enc_meta->merged_cluster_vertex_[merge_index];
+    int layer = enc_meta->merged_cluster_layer_[merge_index];
 
     mergeKernel<<<GRID_DIM, BLOCK_DIM>>>(
         left_position, right_position,
         dg->offsets_, dg->neighbors_,
-        core_u, 0, cluster_index,
+        core_u, layer, cluster_index,
         d_u_candidate_vs_, d_num_u_candidate_vs_,
         d_v_candidate_us_, d_num_v_candidate_us_,
 
         d_encodings_,
-        encoding_meta->num_clusters, enc_d_num_query_us_,
-        encoding_meta->num_total_us, encoding_meta->num_bytes,
+        enc_meta->num_clusters, enc_d_num_query_us_,
+        enc_meta->num_total_us, enc_meta->num_bytes,
         enc_d_query_us_compact_, enc_d_cluster_offsets_,
 
-        encoding_meta->num_layers, enc_d_clusters_per_layer_,
+        enc_meta->num_layers, enc_d_clusters_per_layer_,
 
-        encoding_meta->merge_count,
+        enc_meta->merge_count,
         enc_d_merged_cluster_left_, enc_d_merged_cluster_right_,
         enc_d_merged_cluster_vertex_, enc_d_merged_cluster_layer_);
     cuchk(cudaDeviceSynchronize());
   }
 
   // #ifndef NDEBUG
-  //   cuchk(cudaMemcpy(h_encodings_, d_encodings_, sizeof(uint32_t) * NUM_VD * encoding_meta->num_bytes, cudaMemcpyDeviceToHost));
+  //   cuchk(cudaMemcpy(h_encodings_, d_encodings_, sizeof(uint32_t) * NUM_VD * enc_meta->num_bytes, cudaMemcpyDeviceToHost));
 
   //   std::cout << std::hex;
   //   for (vtype v = 0; v < NUM_VD; ++v)
   //   {
   //     std::cout << "vertex " << v << ": ";
-  //     for (int i = 0; i < encoding_meta->num_bytes; i++)
-  //       std::cout << (int)h_encodings_[v * encoding_meta->num_bytes + i] << " ";
+  //     for (int i = 0; i < enc_meta->num_bytes; i++)
+  //       std::cout << (int)h_encodings_[v * enc_meta->num_bytes + i] << " ";
   //     std::cout << std::endl;
   //   }
   // #endif
@@ -1135,51 +1248,42 @@ void clusterFilter(
     // cluster related
     cpuCluster *&cpu_clusters_, gpuCluster *&gpu_clusters_,
     uint32_t *&h_encodings_, uint32_t *&d_encodings_,
-    encodingMeta *encoding_meta,
+    encodingMeta *enc_meta,
 
     // return
     vtype *h_u_candidate_vs_, numtype *h_num_u_candidate_vs_,
-    vtype *d_u_candidate_vs_, numtype *d_num_u_candidate_vs_)
+    vtype *d_u_candidate_vs_, numtype *d_num_u_candidate_vs_,
+    vtype *h_v_candidate_us_, numtype *h_num_v_candidate_us_,
+    vtype *d_v_candidate_us_, numtype *d_num_v_candidate_us_)
 {
   // clustering
-  clustering(hq, cpu_clusters_, encoding_meta);
+  clustering(hq, cpu_clusters_, enc_meta);
 
-  h_encodings_ = new uint32_t[NUM_VD * encoding_meta->num_bytes];
-  memset(h_encodings_, 0, sizeof(uint32_t) * NUM_VD * encoding_meta->num_bytes);
-  cuchk(cudaMalloc((void **)&d_encodings_, sizeof(uint32_t) * NUM_VD * encoding_meta->num_bytes));
-  cuchk(cudaMemset(d_encodings_, 0, sizeof(uint32_t) * NUM_VD * encoding_meta->num_bytes));
-
-  // numtype *d_num_u_candidate_vs_;
-  // cuchk(cudaMalloc((void **)&d_num_u_candidate_vs_, sizeof(numtype) * NUM_VQ));
-  // cuchk(cudaMemcpy(d_num_u_candidate_vs_, h_num_u_candidate_vs_, sizeof(numtype) * NUM_VQ, cudaMemcpyHostToDevice));
-
-  vtype *d_v_candidate_us_ = nullptr;
-  numtype *d_num_v_candidate_us_ = nullptr;
-  cuchk(cudaMalloc((void **)&d_v_candidate_us_, sizeof(vtype) * NUM_VD));
-  cuchk(cudaMalloc((void **)&d_num_v_candidate_us_, sizeof(numtype) * NUM_VD));
-  cuchk(cudaMemset(d_num_v_candidate_us_, 0, sizeof(numtype) * NUM_VD));
-
-  uint32_t *d_bitmap_reverse = nullptr;
-  size_t bitmap_reverse_pitch = 0;
-  cuchk(cudaMallocPitch((void **)&d_bitmap_reverse, &bitmap_reverse_pitch, sizeof(uint32_t) * NUM_VQ, NUM_VD / 32));
-  cuchk(cudaMemset2D(d_bitmap_reverse, bitmap_reverse_pitch, 0, sizeof(uint32_t) * NUM_VQ, NUM_VD / 32));
+  h_encodings_ = new uint32_t[NUM_VD * enc_meta->num_bytes];
+  memset(h_encodings_, 0, sizeof(uint32_t) * NUM_VD * enc_meta->num_bytes);
+  cuchk(cudaMalloc((void **)&d_encodings_, sizeof(uint32_t) * NUM_VD * enc_meta->num_bytes));
+  cuchk(cudaMemset(d_encodings_, 0, sizeof(uint32_t) * NUM_VD * enc_meta->num_bytes));
 
   uint32_t *d_bitmap = nullptr;
   size_t bitmap_pitch = 0;
   cuchk(cudaMallocPitch((void **)&d_bitmap, &bitmap_pitch, sizeof(uint32_t) * (NUM_VD - 1) / 32 + 1, NUM_VQ));
   cuchk(cudaMemset2D(d_bitmap, bitmap_pitch, 0, sizeof(uint32_t) * (NUM_VD - 1) / 32 + 1, NUM_VQ));
 
+  uint32_t *d_bitmap_reverse = nullptr;
+  cuchk(cudaMalloc((void **)&d_bitmap_reverse, sizeof(uint32_t) * NUM_VD));
+  cuchk(cudaMemset(d_bitmap_reverse, 0, sizeof(uint32_t) * NUM_VD));
+
   oneRoundFilterBidirection(
       hq_backup, hg,
       dq_backup, dg,
       d_bitmap, bitmap_pitch,
-      d_bitmap_reverse, bitmap_reverse_pitch,
+      d_bitmap_reverse,
       d_u_candidate_vs_, d_num_u_candidate_vs_,
       d_v_candidate_us_, d_num_v_candidate_us_);
 
-  vtype *d_query_us_compact_ = nullptr;
-  cuchk(cudaMalloc((void **)&d_query_us_compact_, sizeof(vtype) * encoding_meta->num_total_us));
-  cuchk(cudaMemcpy(d_query_us_compact_, encoding_meta->query_us_compact_, sizeof(vtype) * encoding_meta->num_total_us, cudaMemcpyHostToDevice));
+  // vtype *d_query_us_compact_ = nullptr;
+  // cuchk(cudaMalloc((void **)&d_query_us_compact_, sizeof(vtype) * enc_meta->num_total_us));
+  // cuchk(cudaMemcpy(d_query_us_compact_, enc_meta->query_us_compact_, sizeof(vtype) * enc_meta->num_total_us, cudaMemcpyHostToDevice));
 
 #ifndef NDEBUG
   std::cout << "one round filter done" << std::endl;
@@ -1187,26 +1291,28 @@ void clusterFilter(
 
   encode(
       dg,
-      cpu_clusters_, gpu_clusters_, *num_clusters,
-      h_encodings_, d_encodings_, encoding_meta,
-      encoding_meta->num_layers, encoding_meta->num_clusters_per_layer_,
+      cpu_clusters_, gpu_clusters_,
+      h_encodings_, d_encodings_, enc_meta,
       d_u_candidate_vs_, d_num_u_candidate_vs_,
       d_v_candidate_us_, d_num_v_candidate_us_);
+
 #ifndef NDEBUG
   std::cout << "encode done" << std::endl;
 #endif
 
-  cuchk(cudaMemcpy(h_encodings_, d_encodings_, sizeof(uint32_t) * NUM_VD * encoding_meta->num_bytes, cudaMemcpyDeviceToHost));
-  cuchk(cudaMemcpy(h_num_u_candidate_vs_, d_num_u_candidate_vs_, sizeof(numtype) * NUM_VQ, cudaMemcpyDeviceToHost));
-  cuchk(cudaMemcpy(h_u_candidate_vs_, d_u_candidate_vs_, sizeof(vtype) * NUM_VQ * C_MAX_L_FREQ, cudaMemcpyDeviceToHost));
+  cuchk(cudaMemcpy(h_encodings_, d_encodings_, sizeof(uint32_t) * NUM_VD * enc_meta->num_bytes, cudaMemcpyDeviceToHost));
 
+  cuchk(cudaMemcpy(h_u_candidate_vs_, d_u_candidate_vs_, sizeof(vtype) * NUM_VQ * MAX_L_FREQ, cudaMemcpyDeviceToHost));
+  cuchk(cudaMemcpy(h_num_u_candidate_vs_, d_num_u_candidate_vs_, sizeof(numtype) * NUM_VQ, cudaMemcpyDeviceToHost));
+  cuchk(cudaMemcpy(h_v_candidate_us_, d_v_candidate_us_, sizeof(vtype) * NUM_VD, cudaMemcpyDeviceToHost));
+  cuchk(cudaMemcpy(h_num_v_candidate_us_, d_num_v_candidate_us_, sizeof(numtype) * NUM_VD, cudaMemcpyDeviceToHost));
   // #ifndef NDEBUG
   //   std::cout << std::hex;
   //   for (vtype v = 0; v < NUM_VD; ++v)
   //   {
   //     std::cout << "vertex " << v << ": ";
-  //     for (int i = 0; i < encoding_meta->num_bytes; i++)
-  //       std::cout << (int)h_encodings_[v * encoding_meta->num_bytes + i] << " ";
+  //     for (int i = 0; i < enc_meta->num_bytes; i++)
+  //       std::cout << (int)h_encodings_[v * enc_meta->num_bytes + i] << " ";
   //     std::cout << std::endl;
   //   }
   // #endif
@@ -1219,10 +1325,10 @@ void clusterFilter(
   //     int *flag = new int[NUM_VQ];
   //     memset(flag, -1, sizeof(int) * NUM_VQ);
   //     int reduced = 0;
-  //     for (int i = encoding_meta->num_total_us - 1; ~i; --i)
+  //     for (int i = enc_meta->num_total_us - 1; ~i; --i)
   //     {
-  //       vtype u = encoding_meta->query_us_compact_[i];
-  //       if (h_encodings_[v * encoding_meta->num_bytes + i / 32] & (1 << (i % 32)))
+  //       vtype u = enc_meta->query_us_compact_[i];
+  //       if (h_encodings_[v * enc_meta->num_bytes + i / 32] & (1 << (i % 32)))
   //       {
   //         if (flag[u] == 0)
   //           reduced++;

@@ -42,7 +42,7 @@ void oneRoundFilterBidirection(
 		cpuGraph *hq, cpuGraph *hg,
 		gpuGraph *dq, gpuGraph *dg,
 		uint32_t *d_bitmap_, size_t bitmap_pitch,
-		uint32_t *d_bitmap_reverse_, size_t bitmap_reverse_pitch,
+		uint32_t *d_bitmap_reverse_,
 
 		vtype *d_u_candidate_vs_, numtype *d_num_u_candidate_vs_,
 		vtype *d_v_candidate_us_, numtype *d_num_v_candidate_us_);
@@ -55,14 +55,12 @@ void oneRoundFilterReverse(
 
 void encode(
 		gpuGraph *dg,
-		cpuCluster *cpu_clusters_, gpuCluster *gpu_clusters_, numtype num_clusters,
+		cpuCluster *cpu_clusters_, gpuCluster *gpu_clusters_,
 		uint32_t *h_encodings_, uint32_t *d_encodings_, encodingMeta *encoding_meta,
-		numtype num_layers, numtype *num_clusters_per_layer_,
-		vtype *d_u_candidate_vs_, numtype *num_u_candidates_,
-		vtype *d_v_candidate_us_, numtype *d_num_v_candidate_size_);
+		vtype *d_u_candidate_vs_, numtype *d_num_u_candidate_vs_,
+		vtype *d_v_candidate_us_, numtype *d_num_v_candidate_us_);
 
-__global__ void
-encodeKernel(
+__global__ void encodeKernel(
 		// graph info
 		offtype *d_offsets_, vtype *d_nbrs_,
 		// candidate vertices
@@ -110,24 +108,29 @@ mergeKernel(
 
 __global__ void
 combineMultipleClustersKernel(
+		offtype *d_offsets_, vtype *nbrs_,
 		vtype core_u, bool combine_type,
 		int big_cluster, int *small_clusters_arr_, int num_small_clusters,
 		uint32_t *d_encodings_,
 		numtype num_clusters, numtype *num_query_us_,
 		numtype num_total_us, numtype num_bytes,
-		vtype *query_us_compact_, offtype *cluster_offsets_);
+		vtype *query_us_compact_, offtype *cluster_offsets_,
+		vtype *d_u_candidate_vs_, numtype *d_num_u_candidate_vs_);
 
-void clusterFilter(cpuGraph *hq_backup, gpuGraph *dq_backup,
-									 cpuGraph *hq, cpuGraph *hg,
-									 gpuGraph *dq, gpuGraph *dg,
+void clusterFilter(
+		cpuGraph *hq_backup, gpuGraph *dq_backup,
+		cpuGraph *hq, cpuGraph *hg,
+		gpuGraph *dq, gpuGraph *dg,
 
-									 // cluster related
-									 cpuCluster *&cpu_clusters_, gpuCluster *&gpu_clusters_,
-									 uint32_t *&h_encodings_, uint32_t *&d_encodings_,
-									 encodingMeta *encoding_meta,
+		// cluster related
+		cpuCluster *&cpu_clusters_, gpuCluster *&gpu_clusters_,
+		uint32_t *&h_encodings_, uint32_t *&d_encodings_,
+		encodingMeta *encoding_meta,
 
-									 // return
-									 vtype *h_u_candidate_vs_, numtype *h_num_u_candidate_vs_,
-									 vtype *d_u_candidate_vs_, numtype *d_num_u_candidate_vs_);
+		// return
+		vtype *h_u_candidate_vs_, numtype *h_num_u_candidate_vs_,
+		vtype *d_u_candidate_vs_, numtype *d_num_u_candidate_vs_,
+		vtype *h_v_candidate_us_, numtype *h_num_v_candidate_us_,
+		vtype *d_v_candidate_us_, numtype *d_num_v_candidate_us_);
 
 #endif

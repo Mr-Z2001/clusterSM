@@ -76,7 +76,7 @@ int main(int argc, char **argv)
 	std::cout << "copy done" << std::endl;
 #endif
 
-	vtype *h_u_candidate_vs_ = nullptr; // allocate in the filter function.
+	vtype *h_u_candidate_vs_ = nullptr;
 	vtype *d_u_candidate_vs_ = nullptr;
 	vtype *h_v_candidate_us_ = nullptr; // the same as `bitmap_reverse`
 	vtype *d_v_candidate_us_ = nullptr; // the same sa `d_bitmap_reverse`
@@ -86,6 +86,8 @@ int main(int argc, char **argv)
 	numtype *h_num_v_candidate_us_ = nullptr;
 	numtype *d_num_v_candidate_us_ = nullptr;
 
+	h_u_candidate_vs_ = new vtype[NUM_VQ * MAX_L_FREQ];
+	memset(h_u_candidate_vs_, -1, sizeof(vtype) * NUM_VQ * MAX_L_FREQ);
 	cuchk(cudaMalloc((void **)&d_u_candidate_vs_, sizeof(vtype) * NUM_VQ * MAX_L_FREQ));
 	cuchk(cudaMemset(d_u_candidate_vs_, -1, sizeof(vtype) * NUM_VQ * MAX_L_FREQ));
 	h_v_candidate_us_ = new vtype[NUM_VD];
@@ -119,7 +121,9 @@ int main(int argc, char **argv)
 								h_encodings_, d_encodings_, &enc_meta,
 								// return
 								h_u_candidate_vs_, h_num_u_candidate_vs_,
-								d_u_candidate_vs_, d_num_u_candidate_vs_);
+								d_u_candidate_vs_, d_num_u_candidate_vs_,
+								h_v_candidate_us_, h_num_v_candidate_us_,
+								d_v_candidate_us_, d_num_v_candidate_us_);
 	// filterCG(&hq, &hg, &dq, h_u_candidate_vs_, h_num_u_candidate_vs_, d_u_candidate_vs_);
 
 #ifndef NDEBUG
