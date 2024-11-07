@@ -39,8 +39,8 @@ public:
 
 struct cpuCluster
 {
-	numtype *num_query_us; // size: 1
-	vtype *query_us_;			 // `num_query_us` query vertices. 0-th vertex is the root, it has `num_query_us-1` neighbors.
+	numtype num_query_us; // size: 1
+	vtype *query_us_;			// `num_query_us` query vertices. 0-th vertex is the root, it has `num_query_us-1` neighbors.
 
 	cpuCluster();
 	~cpuCluster();
@@ -50,8 +50,8 @@ struct cpuCluster
 
 struct gpuCluster
 {
-	numtype *num_query_us; // size: 1
-	vtype *query_us_;			 // `num_query_us` query vertices. 0-th vertex is the root, it has `num_query_us-1` neighbors.
+	numtype num_query_us; // size: 1
+	vtype *query_us_;			// `num_query_us` query vertices. 0-th vertex is the root, it has `num_query_us-1` neighbors.
 
 	gpuCluster();
 	~gpuCluster();
@@ -88,7 +88,7 @@ struct encodingMeta
 	encodingMeta();
 	~encodingMeta();
 
-	void init(numtype var_num_clusters, cpuCluster *cpu_clusters_);
+	void init(cpuCluster *cpu_clusters_);
 	void print();
 };
 

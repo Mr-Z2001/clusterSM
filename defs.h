@@ -12,6 +12,9 @@
 #define MAX_EQ 64u
 #define MAX_VLQ 16u
 
+#define MAX_CLUSTERS 150
+#define MAX_LAYERS 100
+
 #define MAX_CUCKOO_LOOP 64u
 #define BUCKET_DIM 8u
 #define CUCKOO_SCALE_PER_TABLE 2u

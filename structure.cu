@@ -116,37 +116,32 @@ void cpuRelation::copy_to_gpu(gpuRelation &gpu_relations, bool copy_keys)
 
 cpuCluster::cpuCluster()
 {
-  cuchk(cudaMallocHost(&num_query_us, sizeof(numtype)));
+  num_query_us = 0;
   query_us_ = nullptr;
 }
 
 cpuCluster::~cpuCluster()
 {
-  if (num_query_us)
-    cuchk(cudaFreeHost(num_query_us));
   if (query_us_)
     delete[] query_us_;
 }
 
 cpuCluster &cpuCluster::operator=(const cpuCluster &rhs)
 {
-  cuchk(cudaMallocHost(&num_query_us, sizeof(numtype)));
-  *num_query_us = *rhs.num_query_us;
-  query_us_ = new vtype[*num_query_us];
-  memcpy(query_us_, rhs.query_us_, *num_query_us * sizeof(vtype));
+  num_query_us = rhs.num_query_us;
+  query_us_ = new vtype[num_query_us];
+  memcpy(query_us_, rhs.query_us_, num_query_us * sizeof(vtype));
   return *this;
 }
 
 gpuCluster::gpuCluster()
 {
-  cuchk(cudaMalloc(&num_query_us, sizeof(numtype)));
+  num_query_us = 0;
   query_us_ = nullptr;
 }
 
 gpuCluster::~gpuCluster()
 {
-  if (num_query_us)
-    cuchk(cudaFree(num_query_us));
   if (query_us_)
     cuchk(cudaFree(query_us_));
 }
@@ -217,15 +212,14 @@ encodingMeta::~encodingMeta()
     delete[] combine_type_;
 }
 
-void encodingMeta::init(numtype var_num_clusters, cpuCluster *cpu_clusters_)
+void encodingMeta::init(cpuCluster *cpu_clusters_)
 {
-  num_clusters = var_num_clusters;
   num_query_us_ = new numtype[num_clusters];
   cluster_offsets_ = new numtype[num_clusters + 1];
   num_total_us = 0;
   for (int i = 0; i < num_clusters; ++i)
   {
-    num_query_us_[i] = cpu_clusters_[i].num_query_us[0];
+    num_query_us_[i] = cpu_clusters_[i].num_query_us;
     cluster_offsets_[i] = num_total_us;
     num_total_us += num_query_us_[i];
   }

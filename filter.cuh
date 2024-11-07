@@ -28,7 +28,7 @@ void getVertexCoverHeuristic( // Greedy
 
 void clustering(
 		cpuGraph *hq,
-		cpuCluster *&cpu_clusters_, numtype *num_clusters,
+		cpuCluster *&cpu_clusters_,
 		encodingMeta *enc_meta);
 
 __global__ void
@@ -123,7 +123,6 @@ void clusterFilter(cpuGraph *hq_backup, gpuGraph *dq_backup,
 
 									 // cluster related
 									 cpuCluster *&cpu_clusters_, gpuCluster *&gpu_clusters_,
-									 numtype *num_clusters,
 									 uint32_t *&h_encodings_, uint32_t *&d_encodings_,
 									 encodingMeta *encoding_meta,
 

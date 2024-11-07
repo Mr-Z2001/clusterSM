@@ -212,9 +212,10 @@ inline void extendArray(T *&arr_old, numtype old_length, numtype addition_length
 
 void clustering(
     cpuGraph *hq,
-    cpuCluster *&cpu_clusters_, numtype *num_clusters,
+    cpuCluster *&cpu_clusters_,
     encodingMeta *enc_meta)
 {
+  // get vertex cover
   vtype *vertex_cover_ = new vtype[hq->num_v];
   memset(vertex_cover_, 0, sizeof(vtype) * hq->num_v);
   numtype num_vertex_covers = 0;
@@ -226,101 +227,108 @@ void clustering(
   std::cout << std::endl;
 #endif
 
-  // construct clusters
-  cpu_clusters_ = new cpuCluster[num_vertex_covers];
-  enc_meta->is_a_valid_cluster_ = new bool[num_vertex_covers];
-  memset(enc_meta->is_a_valid_cluster_, true, sizeof(bool) * num_vertex_covers);
-  *num_clusters = num_vertex_covers;
-  for (int i = 0; i < *num_clusters; ++i)
+  // construct clusters first layer
+  numtype &num_clusters = enc_meta->num_clusters; // use reference for simplicity.
+  num_clusters = num_vertex_covers;
+
+  cpu_clusters_ = new cpuCluster[MAX_CLUSTERS];
+
+  enc_meta->is_a_valid_cluster_ = new bool[MAX_CLUSTERS];
+  memset(enc_meta->is_a_valid_cluster_, true, sizeof(bool) * MAX_CLUSTERS);
+
+  for (int i = 0; i < num_clusters; ++i)
   {
-    cpu_clusters_[i].num_query_us[0] = hq->outdeg_[vertex_cover_[i]] + 1;
-    cpu_clusters_[i].query_us_ = new vtype[cpu_clusters_[i].num_query_us[0]];
-    cpu_clusters_[i].query_us_[0] = vertex_cover_[i];
-    memcpy(&cpu_clusters_[i].query_us_[1],
-           hq->neighbors_ + hq->offsets_[vertex_cover_[i]],
-           sizeof(vtype) * (cpu_clusters_[i].num_query_us[0] - 1));
+    // aliases for simplicity.
+    vtype core_u = vertex_cover_[i];
+    cpuCluster &cluster = cpu_clusters_[i];
+
+    cluster.num_query_us = hq->outdeg_[core_u] + 1;
+    cluster.query_us_ = new vtype[cluster.num_query_us];
+    cluster.query_us_[0] = core_u;
+    memcpy(&cluster.query_us_[1],
+           hq->neighbors_ + hq->offsets_[core_u],
+           sizeof(vtype) * (cluster.num_query_us - 1));
   }
 
   // join clusters
   vtype connection_vertex;
   numtype num_new_clusters = 0;
-  numtype num_actual_new_clusters = 2; // assigned arbitrarily, larger than 1.
+  numtype num_actual_new_clusters = 0; // `new_cluster - combined_cluster`, assigned arbitrarily, larger than 1.
   int layer_index = 0;
-  int *num_clusters_per_layer_ = new int[100]; // I don't know actually how many layers would be, but definitely less than 100.
-  memset(num_clusters_per_layer_, 0, sizeof(int) * 100);
-  num_clusters_per_layer_[layer_index] = *num_clusters;
+  int *num_clusters_per_layer_ = new int[MAX_LAYERS]; // I don't know actually how many layers would be, but definitely less than 100.
+  memset(num_clusters_per_layer_, 0, sizeof(int) * MAX_LAYERS);
+  num_clusters_per_layer_[0] = num_clusters;
+
   int i = 0;
-  while (num_actual_new_clusters > 1)
+
+  do // while(num_actual_new_clusters > 1)
   {
-    num_actual_new_clusters = 0;
     num_new_clusters = 0;
-    // join clusters in layer (i-1) to form new clusters in layer i
-    for (; i < *num_clusters; ++i) // get cluster left
+    num_actual_new_clusters = 0;
+    // join clusters in layer `k-1` to form new clusters in layer `k`
+    for (; i < num_clusters; ++i) // get cluster left
     {
       cpuCluster &cluster_i = cpu_clusters_[i];
       if (enc_meta->is_a_valid_cluster_[i] == false)
         continue;
+      vtype core_i = cluster_i.query_us_[0];
 
-      for (int j = i + 1; j < *num_clusters; ++j) // get cluster right
+      for (int j = i + 1; j < num_clusters; ++j) // get cluster right
       {
-        // join cluster_i and cluster_j
         cpuCluster &cluster_j = cpu_clusters_[j];
         if (enc_meta->is_a_valid_cluster_[j] == false)
           continue;
+        vtype core_j = cluster_j.query_us_[0];
 
-        for (uint32_t i_ptr = 1; i_ptr < cpu_clusters_[i].num_query_us[0]; ++i_ptr)
+        // join cluster_i and cluster_j
+        for (uint32_t i_ptr = 1; i_ptr < cluster_i.num_query_us; ++i_ptr) // iterate on cluster_i query vertices
         {
-          vtype u_i = cpu_clusters_[i].query_us_[i_ptr];
-          for (uint32_t j_ptr = 0; j_ptr < cpu_clusters_[j].num_query_us[0]; ++j_ptr)
+          vtype u_i = cluster_i.query_us_[i_ptr];
+
+          for (uint32_t j_ptr = 0; j_ptr < cluster_j.num_query_us; ++j_ptr) // iterate on cluster_j query vertices
           {
-            vtype u_j = cpu_clusters_[j].query_us_[j_ptr];
+            vtype u_j = cluster_j.query_us_[j_ptr];
 
             if (u_i == u_j)
             {
-              // if (cpu_clusters_[i].num_query_us[0] == 2 && cpu_clusters_[j].num_query_us[0] == 2 &&
-              //     cpu_clusters_[i].query_us_[0] == cpu_clusters_[j].query_us_[1])
-              // {
-              //   std::cout << "continue" << std::endl;
-              //   continue;
-              // }
-
               connection_vertex = u_i;
-              extendArray(cpu_clusters_, *num_clusters + num_new_clusters);
-              extendArray(enc_meta->is_a_valid_cluster_, *num_clusters + num_new_clusters);
               num_new_clusters++;
+              int new_cluster_index = num_clusters + num_new_clusters - 1;
 
-              enc_meta->is_a_valid_cluster_[*num_clusters + num_new_clusters - 1] = true;
-              auto &var_cluster = cpu_clusters_[*num_clusters + num_new_clusters - 1];
+              enc_meta->is_a_valid_cluster_[new_cluster_index] = true;
+              cpuCluster &new_cluster = cpu_clusters_[new_cluster_index];
+
               if (i_ptr && j_ptr) // both are not core vertex
               {
-                var_cluster.num_query_us[0] = 3;
-                if (cpu_clusters_[i].query_us_[0] == cpu_clusters_[j].query_us_[0])
-                  var_cluster.num_query_us[0]--;
-                var_cluster.query_us_ = new vtype[var_cluster.num_query_us[0]];
-                var_cluster.query_us_[0] = connection_vertex;
-                var_cluster.query_us_[1] = cpu_clusters_[i].query_us_[0]; // core of i-th
-                if (cpu_clusters_[i].query_us_[0] != cpu_clusters_[j].query_us_[0])
-                  var_cluster.query_us_[2] = cpu_clusters_[j].query_us_[0]; // core of j-th
+                new_cluster.num_query_us = 3;
+                if (core_i == core_j)
+                  new_cluster.num_query_us--;
+                new_cluster.query_us_ = new vtype[new_cluster.num_query_us];
+                new_cluster.query_us_[0] = connection_vertex;
+                new_cluster.query_us_[1] = core_i; // core of i-th
+                if (core_i != core_j)
+                  new_cluster.query_us_[2] = core_j; // core of j-th
               }
               else if (!j_ptr) // u_j is the core vertex
               {
-                var_cluster.num_query_us[0] = 2;
-                var_cluster.query_us_ = new vtype[2];
-                var_cluster.query_us_[0] = connection_vertex;
-                var_cluster.query_us_[1] = cpu_clusters_[i].query_us_[0]; // core of i-th
+                new_cluster.num_query_us = 2;
+                new_cluster.query_us_ = new vtype[2];
+                new_cluster.query_us_[0] = connection_vertex;
+                new_cluster.query_us_[1] = core_i; // core of i-th
               }
               else
               {
-                std::cout << "unexpected case" << std::endl;
-                std::cout << "i: " << i << " j: " << j << " i_ptr: " << i_ptr << " j_ptr: " << j_ptr << std::endl;
-                std::cout << "u_i: " << u_i << " u_j: " << u_j << std::endl;
+                std::cerr << "unexpected case" << std::endl;
+                std::cerr << "i: " << i << " j: " << j << " i_ptr: " << i_ptr << " j_ptr: " << j_ptr << std::endl;
+                std::cerr << "u_i: " << u_i << " u_j: " << u_j << std::endl;
+                exit(1);
               }
 
 #ifndef NDEBUG
               std::cout << "new cluster: ";
-              std::cout << "num query us: " << cpu_clusters_[*num_clusters + num_new_clusters - 1].num_query_us[0] << " ";
-              for (int k = 0; k < cpu_clusters_[*num_clusters + num_new_clusters - 1].num_query_us[0]; k++)
-                std::cout << cpu_clusters_[*num_clusters + num_new_clusters - 1].query_us_[k] << " ";
+              std::cout << "num query us: " << new_cluster.num_query_us << " ";
+              for (int k = 0; k < new_cluster.num_query_us; k++)
+                std::cout << new_cluster.query_us_[k] << " ";
               std::cout << std::endl;
 #endif
 
@@ -343,23 +351,24 @@ void clustering(
     num_actual_new_clusters = num_new_clusters;
 
     // combine
-    for (int new_cluster_outer_ptr = *num_clusters; new_cluster_outer_ptr < *num_clusters + num_new_clusters; ++new_cluster_outer_ptr)
+    for (int new_cluster_out_ptr = num_clusters; new_cluster_out_ptr < num_clusters + num_new_clusters; ++new_cluster_out_ptr)
     {
-      if (enc_meta->is_a_valid_cluster_[new_cluster_outer_ptr] == false)
+      if (enc_meta->is_a_valid_cluster_[new_cluster_out_ptr] == false)
         continue;
-      vtype core_u_outer = cpu_clusters_[new_cluster_outer_ptr].query_us_[0];
+      cpuCluster &cluster_out = cpu_clusters_[new_cluster_out_ptr];
+      vtype core_u_out = cluster_out.query_us_[0];
 
       // scan for the inner, combine all clusters that have the same core vertex.
       std::set<int> to_combine_cluster_index;
-      to_combine_cluster_index.insert(new_cluster_outer_ptr);
+      to_combine_cluster_index.insert(new_cluster_out_ptr);
       std::set<vtype> core_nbrs;
-      for (int i = 1; i < cpu_clusters_[new_cluster_outer_ptr].num_query_us[0]; ++i)
-        core_nbrs.insert(cpu_clusters_[new_cluster_outer_ptr].query_us_[i]);
-      for (int new_cluster_inner_ptr = new_cluster_outer_ptr + 1; new_cluster_inner_ptr < *num_clusters + num_new_clusters; ++new_cluster_inner_ptr)
+      for (int i = 1; i < cpu_clusters_[new_cluster_out_ptr].num_query_us[0]; ++i)
+        core_nbrs.insert(cpu_clusters_[new_cluster_out_ptr].query_us_[i]);
+      for (int new_cluster_inner_ptr = new_cluster_out_ptr + 1; new_cluster_inner_ptr < *num_clusters + num_new_clusters; ++new_cluster_inner_ptr)
       {
         if (enc_meta->is_a_valid_cluster_[new_cluster_inner_ptr] == false)
           continue;
-        if (cpu_clusters_[new_cluster_inner_ptr].query_us_[0] == core_u_outer)
+        if (cpu_clusters_[new_cluster_inner_ptr].query_us_[0] == core_u_out)
         {
           to_combine_cluster_index.insert(new_cluster_inner_ptr);
           for (int i = 1; i < cpu_clusters_[new_cluster_inner_ptr].num_query_us[0]; ++i)
@@ -392,13 +401,13 @@ void clustering(
         enc_meta->combine_type_[enc_meta->combine_cnt] = 0;
 
         enc_meta->is_a_valid_cluster_[*num_clusters + num_new_clusters - 1] = true;
-        auto &var_cluster = cpu_clusters_[*num_clusters + num_new_clusters - 1];
-        var_cluster.num_query_us[0] = core_nbrs.size() + 1;
-        var_cluster.query_us_ = new vtype[var_cluster.num_query_us[0]];
-        var_cluster.query_us_[0] = core_u_outer;
+        auto &new_cluster = cpu_clusters_[*num_clusters + num_new_clusters - 1];
+        new_cluster.num_query_us[0] = core_nbrs.size() + 1;
+        new_cluster.query_us_ = new vtype[new_cluster.num_query_us[0]];
+        new_cluster.query_us_[0] = core_u_out;
         int i = 1;
         for (auto core_nbr : core_nbrs)
-          var_cluster.query_us_[i++] = core_nbr;
+          new_cluster.query_us_[i++] = core_nbr;
 
         largest_cluster_index = *num_clusters + num_new_clusters - 1;
 
@@ -430,7 +439,7 @@ void clustering(
     *num_clusters += num_new_clusters;
     num_clusters_per_layer_[layer_index] = num_new_clusters;
     std::cout << "layer " << layer_index << " num_clusters: " << *num_clusters << std::endl;
-  }
+  } while (num_actual_new_clusters > 1);
 
   // construct meta
   enc_meta->init(*num_clusters, cpu_clusters_);
@@ -1125,7 +1134,6 @@ void clusterFilter(
 
     // cluster related
     cpuCluster *&cpu_clusters_, gpuCluster *&gpu_clusters_,
-    numtype *num_clusters,
     uint32_t *&h_encodings_, uint32_t *&d_encodings_,
     encodingMeta *encoding_meta,
 
@@ -1134,7 +1142,7 @@ void clusterFilter(
     vtype *d_u_candidate_vs_, numtype *d_num_u_candidate_vs_)
 {
   // clustering
-  clustering(hq, cpu_clusters_, num_clusters, encoding_meta);
+  clustering(hq, cpu_clusters_, encoding_meta);
 
   h_encodings_ = new uint32_t[NUM_VD * encoding_meta->num_bytes];
   memset(h_encodings_, 0, sizeof(uint32_t) * NUM_VD * encoding_meta->num_bytes);
