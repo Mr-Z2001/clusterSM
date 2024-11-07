@@ -47,26 +47,61 @@ order done
 4 1 2
 2 0 2
 
-========= Program hit cudaErrorCooperativeLaunchTooLarge (error 720) due to "too many blocks in cooperative launch" on CUDA API call to cudaLaunchCooperativeKernel.
-=========     Saved host backtrace up to driver entry point at error
-=========     Host Frame: [0x4466f5]
-=========                in /lib/x86_64-linux-gnu/libcuda.so.1
-=========     Host Frame:cudaLaunchCooperativeKernel [0x7575d]
-=========                in /usr/local/cuda-12.4/lib64/libcudart.so.12
-=========     Host Frame:cudaError cudaLaunchCooperativeKernel<void>(void const*, dim3, dim3, void**, unsigned long, CUstream_st*) in /usr/local/cuda-12.4/include/cuda_runtime.h:350 [0x72bb4]
-=========                in /home/zcx/codes/clusterSM/./build/ClusterSM
-=========     Host Frame:joinOneEdge(cpuGraph*, cpuGraph*, gpuGraph*, gpuGraph*, unsigned int, unsigned int, unsigned int*, unsigned int&, unsigned int*, unsigned int&, unsigned int*, unsigned int*, unsigned int*, unsigned int*, unsigned int*, unsigned int*, unsigned int*, unsigned int*, unsigned int*, encodingMeta*) in /home/zcx/codes/clusterSM/join.cu:527 [0x7208f]
-=========                in /home/zcx/codes/clusterSM/./build/ClusterSM
-=========     Host Frame:join(cpuGraph*, cpuGraph*, gpuGraph*, gpuGraph*, unsigned int*, unsigned int*, unsigned int&, encodingMeta*, unsigned int*, unsigned int*, unsigned int*, unsigned int*, unsigned int*, unsigned int*, unsigned int*, unsigned int*, unsigned int*, unsigned int*, cpuCluster*, gpuCluster*) in /home/zcx/codes/clusterSM/join.cu:573 [0x72476]
-=========                in /home/zcx/codes/clusterSM/./build/ClusterSM
-=========     Host Frame:main in /home/zcx/codes/clusterSM/main.cu:154 [0xa697]
-=========                in /home/zcx/codes/clusterSM/./build/ClusterSM
-=========     Host Frame:__libc_start_call_main in ../sysdeps/nptl/libc_start_call_main.h:58 [0x29d8f]
-=========                in /lib/x86_64-linux-gnu/libc.so.6
-=========     Host Frame:__libc_start_main in ../csu/libc-start.c:392 [0x29e3f]
-=========                in /lib/x86_64-linux-gnu/libc.so.6
-=========     Host Frame:_start [0x9804]
-=========                in /home/zcx/codes/clusterSM/./build/ClusterSM
-========= 
-========= Target application returned an error
-========= ERROR SUMMARY: 1 error
+first join done
+num_res: 2
+4294967295 4294967295 4294967295 2 4294967295 
+4294967295 4294967295 4294967295 9 4294967295 
+NUM_VD: 11
+u = 1, u_matched = 3
+num_res_old: 2
+enc_pos = 8
+After join one edge, num_res_new: 3
+join edge 0: 7 done
+4294967295 1 4294967295 2 4294967295 
+4294967295 6 4294967295 9 4294967295 
+4294967295 8 4294967295 9 4294967295 
+NUM_VD: 11
+u = 4, u_matched = 3
+num_res_old: 3
+enc_pos = 6
+After join one edge, num_res_new: 3
+join edge 1: 8 done
+4294967295 6 4294967295 9 10 
+4294967295 8 4294967295 9 10 
+4294967295 1 4294967295 2 3 
+NUM_VD: 11
+u = 0, u_matched = 1
+num_res_old: 3
+enc_pos = 1
+After join one edge, num_res_new: 7
+join edge 2: 1 done
+5 8 4294967295 9 10 
+6 8 4294967295 9 10 
+7 8 4294967295 9 10 
+0 1 4294967295 2 3 
+4 1 4294967295 2 3 
+4 6 4294967295 9 10 
+8 6 4294967295 9 10 
+NUM_VD: 11
+u = 2, u_matched = 1
+num_res_old: 7
+enc_pos = 2
+After join one edge, num_res_new: 10
+join edge 3: 4 done
+0 1 4 2 3 
+7 8 5 9 10 
+7 8 6 9 10 
+8 6 4 9 10 
+4 1 0 2 3 
+4 6 8 9 10 
+5 8 6 9 10 
+5 8 7 9 10 
+6 8 5 9 10 
+6 8 7 9 10 
+join edge 4: 2 done
+0 1 4 2 3 
+7 8 5 9 10 
+4 1 0 2 3 
+5 8 7 9 10 
+num_res: 4
+========= ERROR SUMMARY: 0 errors

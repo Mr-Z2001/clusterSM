@@ -84,13 +84,28 @@
 //     vtype *d_temp_res_table, size_t d_temp_res_table_pitch);
 
 __global__ void
+selectPartialMatchingsKernel(
+    offtype *offsets_, vtype *nbrs_,
+    vtype u, vtype u_matched,
+    vtype *d_res_table_old_, numtype num_res_old,
+    vtype *d_res_table_, numtype *num_res_new,
+
+    uint32_t *d_encodings_, numtype num_bytes,
+    uint32_t enc_pos_u, uint32_t enc_pos_u_matched);
+
+__global__ void collectMappedVs(
+    vtype u_matched,
+    bool *d_flag_,
+    vtype *d_res_table_old_, numtype num_res_old);
+
+__global__ void
 joinOneEdgeKernel(
     // structure
     offtype *offsets_, vtype *nbrs_,
 
     vtype u, vtype u_matched,
     vtype *d_res_table_old_, numtype num_res_old,
-    vtype *d_res_table_, numtype num_res_new,
+    vtype *d_res_table_, numtype *num_res_new,
     vtype *candidate_v_buffer_,
 
     uint32_t *v_candidate_us_, // bitmap reverse
@@ -108,7 +123,7 @@ void join(
     vtype *h_res_table_, numtype &num_res,
 
     encodingMeta *enc_meta,
-    uint32_t *h_encodings_, uint32_t* d_encodings_,
+    uint32_t *h_encodings_, uint32_t *d_encodings_,
 
     vtype *h_u_candidate_vs_, numtype *h_num_u_candidate_vs_,
     vtype *d_u_candidate_vs_, numtype *d_num_u_candidate_vs_,

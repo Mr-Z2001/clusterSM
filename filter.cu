@@ -525,7 +525,7 @@ NLCFilter(
       {
         auto group = cooperative_groups::coalesced_threads();
         int rank = group.thread_rank();
-        d_v_candidate_us_[v * C_NUM_VQ + rank] = lid;
+        d_v_candidate_us_[v] |= (1 << lid);
         if (rank == 0)
           d_v_candidate_size_[v] = group.size();
         group.sync();
@@ -648,20 +648,9 @@ oneRoundFilterBidirectionKernel(
   if (idx < C_NUM_VD)
     d_num_v_candidate_us_[idx] = __popc(s_bitmap_reverse[tid]);
   __syncthreads();
-  uint32_t mask = 1;
-  numtype my_cnt = 0;
+
   if (idx < C_NUM_VD)
-  {
-    for (vtype u = 0; u < C_NUM_VQ; ++u)
-    {
-      if (s_bitmap_reverse[tid] & mask)
-      {
-        d_v_candidate_us_[idx * C_NUM_VQ + my_cnt] = u;
-        my_cnt++;
-      }
-      mask <<= 1;
-    }
-  }
+    d_v_candidate_us_[idx] = s_bitmap_reverse[tid];
   __syncthreads();
 }
 
@@ -800,12 +789,8 @@ encodeKernel(
     {
       vtype tobe_map_u = enc_query_us_compact_[enc_pos + i];
       // TODO: optimize using bitmap. fast check.
-      for (int j = 0; j < d_num_v_candidate_us_[v_nbr]; ++j)
-      {
-        if (d_v_candidate_us_[v_nbr * C_NUM_VQ + j] == tobe_map_u)
-          atomicOr(&encodings_[v_nbr * enc_num_bytes + (enc_pos + i) / 32], 1 << ((enc_pos + i) % 32));
-        // encodings_[v_nbr * enc_num_bytes + (enc_pos + i) / 32] |= 1 << ((enc_pos + i) % 32);
-      }
+      if (d_v_candidate_us_[v_nbr] & (1 << tobe_map_u))
+        atomicOr(&encodings_[v_nbr * enc_num_bytes + (enc_pos + i) / 32], 1 << ((enc_pos + i) % 32));
       __syncwarp();
     }
     nbr_off += warpSize;
@@ -889,13 +874,9 @@ mergeKernel(
       for (int i = 1; i < enc_num_query_us_[cluster_index]; ++i)
       {
         vtype tobe_map_u = enc_query_us_compact_[enc_pos + i];
+        if (d_v_candidate_us_[v_nbr] & (1 << tobe_map_u))
+          atomicOr(&encodings_[v_nbr * enc_num_bytes + (enc_pos + i) / 32], 1 << ((enc_pos + i) % 32));
         // TODO: optimize using bitmap. fast check.
-        for (int j = 0; j < d_num_v_candidate_us_[v_nbr]; ++j)
-        {
-          if (d_v_candidate_us_[v_nbr * C_NUM_VQ + j] == tobe_map_u)
-            atomicOr(&encodings_[v_nbr * enc_num_bytes + (enc_pos + i) / 32], 1 << ((enc_pos + i) % 32));
-          // encodings_[v_nbr * enc_num_bytes + (enc_pos + i) / 32] |= 1 << ((enc_pos + i) % 32);
-        }
         __syncwarp();
       }
       nbr_off += warpSize;
@@ -1166,7 +1147,7 @@ void clusterFilter(
 
   vtype *d_v_candidate_us_ = nullptr;
   numtype *d_num_v_candidate_us_ = nullptr;
-  cuchk(cudaMalloc((void **)&d_v_candidate_us_, sizeof(vtype) * NUM_VD * NUM_VQ));
+  cuchk(cudaMalloc((void **)&d_v_candidate_us_, sizeof(vtype) * NUM_VD));
   cuchk(cudaMalloc((void **)&d_num_v_candidate_us_, sizeof(numtype) * NUM_VD));
   cuchk(cudaMemset(d_num_v_candidate_us_, 0, sizeof(numtype) * NUM_VD));
 
@@ -1208,6 +1189,8 @@ void clusterFilter(
 #endif
 
   cuchk(cudaMemcpy(h_encodings_, d_encodings_, sizeof(uint32_t) * NUM_VD * encoding_meta->num_bytes, cudaMemcpyDeviceToHost));
+  cuchk(cudaMemcpy(h_num_u_candidate_vs_, d_num_u_candidate_vs_, sizeof(numtype) * NUM_VQ, cudaMemcpyDeviceToHost));
+  cuchk(cudaMemcpy(h_u_candidate_vs_, d_u_candidate_vs_, sizeof(vtype) * NUM_VQ * C_MAX_L_FREQ, cudaMemcpyDeviceToHost));
 
   // #ifndef NDEBUG
   //   std::cout << std::hex;

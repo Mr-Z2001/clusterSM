@@ -147,7 +147,7 @@ int main(int argc, char **argv)
 	std::cout << std::endl;
 #endif
 
-	numtype MAX_RES = 100000;
+	numtype MAX_RES = 500000;
 
 	vtype *h_res_table = new vtype[MAX_RES * NUM_VQ]; // around 4.5 MB.
 	numtype num_res = 0;
@@ -164,9 +164,9 @@ int main(int argc, char **argv)
 			h_v_candidate_us_, h_num_v_candidate_us_,
 			d_v_candidate_us_, d_num_v_candidate_us_,
 
-			cpu_clusters_, gpu_clusters_
+			cpu_clusters_, gpu_clusters_);
 
-	);
+	std::cout << "num_res: " << num_res << std::endl;
 
 	if (h_v_candidate_us_)
 		cuchk(cudaFreeHost(h_v_candidate_us_));
