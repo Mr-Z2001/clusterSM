@@ -244,34 +244,6 @@ void joinOneEdge(
   cuchk(cudaMalloc((void **)&d_num_candidates_in_buffer, sizeof(int)));
   cuchk(cudaMemset(d_num_candidates_in_buffer, 0, sizeof(int)));
 
-  // void *kernelArgs[] = {
-  //     (void *)&dg->offsets_, (void *)&dg->neighbors_,
-  //     (void *)&u, (void *)&u_matched,
-  //     (void *)&d_res_table_old_, (void *)&num_res_old,
-  //     (void *)&d_res_table_, (void *)&num_res_new,
-  //     (void *)&d_candidate_v_buffer_,
-  //     (void *)&d_v_candidate_us_,
-  //     (void *)&d_encodings_, (void *)&(enc_meta->num_bytes),
-  //     (void *)&enc_pos,
-  //     (void *)&d_num_candidates_in_buffer,
-  //     (void *)&d_flag_
-
-  // };
-
-  // int num_threads = std::max(NUM_VD, num_res_old * 32);
-  // dim3 block(512, 1, 1);
-  // dim3 grid((num_threads - 1) / 512 + 1, 1, 1);
-  // cuchk(cudaLaunchCooperativeKernel(
-  //     (void *)joinOneEdgeKernel,
-  //     grid, block,
-  //     kernelArgs));
-
-  // collectMappedVs<<<GRID_DIM, BLOCK_DIM>>>(
-  //     u_matched,
-  //     d_flag_,
-  //     d_res_table_old_, num_res_old);
-  // cuchk(cudaDeviceSynchronize());
-
   uint32_t *d_num_new_res;
   cuchk(cudaMalloc((void **)&d_num_new_res, sizeof(uint32_t)));
   cuchk(cudaMemset(d_num_new_res, 0, sizeof(uint32_t)));
@@ -322,7 +294,7 @@ void join(
 
   // make sure all the swap operations are done in this function, not inside sub-functions.
 
-  numtype MAX_RES = 500000;
+  numtype MAX_RES = 5000000; // 5e6
   numtype num_res_old = 0;
   vtype *d_res_table_;
   cuchk(cudaMalloc((void **)&d_res_table_, sizeof(vtype) * NUM_VQ * MAX_RES));
@@ -344,15 +316,6 @@ void join(
 #ifndef NDEBUG
   std::cout << "first join done" << std::endl;
   std::cout << "num_res: " << num_res_old << std::endl;
-  cuchk(cudaMemcpy(h_res_table_, d_res_table_old_, sizeof(vtype) * NUM_VQ * num_res_old, cudaMemcpyDeviceToHost));
-  for (int i = 0; i < num_res_old; ++i)
-  {
-    for (int j = 0; j < NUM_VQ; ++j)
-    {
-      std::cout << h_res_table_[i * NUM_VQ + j] << " ";
-    }
-    std::cout << std::endl;
-  }
 #endif
 
   for (offtype e_off = 0; e_off < NUM_EQ; ++e_off)
@@ -384,7 +347,7 @@ void join(
       cuchk(cudaMalloc((void **)&d_num_res_new, sizeof(numtype)));
       cuchk(cudaMemset(d_num_res_new, 0, sizeof(numtype)));
 
-      uint32_t enc_pos_u = -1, enc_pos_u_matched = -1;
+      int enc_pos_u = -1, enc_pos_u_matched = -1;
       for (int cluster_index = enc_meta->num_clusters - 1; ~cluster_index; --cluster_index)
       {
         enc_pos_u = -1, enc_pos_u_matched = -1;

@@ -131,16 +131,6 @@ int main(int argc, char **argv)
 	std::cout << std::dec << std::endl;
 	std::cout << "filter done" << std::endl;
 	enc_meta.print();
-
-	for (vtype u = 0; u < NUM_VQ; ++u)
-	{
-		std::cout << "u: " << u << " " << h_num_u_candidate_vs_[u] << std::endl;
-		for (int i = 0; i < h_num_u_candidate_vs_[u]; ++i)
-		{
-			std::cout << h_u_candidate_vs_[u * MAX_L_FREQ + i] << " ";
-		}
-		std::cout << std::endl;
-	}
 #endif
 
 	vtype root = enc_meta.query_us_compact_[enc_meta.cluster_offsets_[enc_meta.num_clusters - 1]];
@@ -154,7 +144,7 @@ int main(int argc, char **argv)
 	std::cout << std::endl;
 #endif
 
-	numtype MAX_RES = 500000;
+	numtype MAX_RES = 5000000; // 5e6
 
 	vtype *h_res_table = new vtype[MAX_RES * NUM_VQ]; // around 4.5 MB.
 	numtype num_res = 0;

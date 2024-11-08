@@ -56,7 +56,7 @@ void oneRoundFilterReverse(
 __global__ void
 compactCandidatesKernel(
 		vtype *d_u_candidate_vs_, numtype *d_num_u_candidate_vs_,
-		numtype *d_num_u_candidate_vs_new_);
+		vtype *d_u_candidate_vs_new_, numtype *d_num_u_candidate_vs_new_);
 
 void encode(
 		gpuGraph *dg,
@@ -133,9 +133,9 @@ void clusterFilter(
 		encodingMeta *encoding_meta,
 
 		// return
-		vtype *h_u_candidate_vs_, numtype *h_num_u_candidate_vs_,
-		vtype *d_u_candidate_vs_, numtype *d_num_u_candidate_vs_,
-		vtype *h_v_candidate_us_, numtype *h_num_v_candidate_us_,
-		vtype *d_v_candidate_us_, numtype *d_num_v_candidate_us_);
+		vtype *&h_u_candidate_vs_, numtype *&h_num_u_candidate_vs_,
+		vtype *&d_u_candidate_vs_, numtype *&d_num_u_candidate_vs_,
+		vtype *&h_v_candidate_us_, numtype *&h_num_v_candidate_us_,
+		vtype *&d_v_candidate_us_, numtype *&d_num_v_candidate_us_);
 
 #endif

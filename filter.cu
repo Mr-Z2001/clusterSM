@@ -964,9 +964,16 @@ combineMultipleClustersKernel(
 
   // TODO: only pick core_u's candidates.
   if (wid_g < d_num_u_candidate_vs_[core_u])
+  {
     if (lid == 0)
       s_warp_v[wid] = d_u_candidate_vs_[core_u * C_MAX_L_FREQ + wid_g];
+  }
+  else
+    return;
   __syncwarp();
+
+  if (s_warp_v[wid] == UINT32_MAX)
+    return;
 
   // combine core_v
   if (lid < num_small_clusters) // one lid, one small cluster.core_u position.
@@ -1030,7 +1037,7 @@ combineMultipleClustersKernel(
 __global__ void
 compactCandidatesKernel(
     vtype *d_u_candidate_vs_, numtype *d_num_u_candidate_vs_,
-    numtype *d_num_u_candidate_vs_new_)
+    vtype *d_u_candidate_vs_new_, numtype *d_num_u_candidate_vs_new_)
 {
   int tid = threadIdx.x;
   int bid = blockIdx.x;
@@ -1045,7 +1052,6 @@ compactCandidatesKernel(
   {
     if (idx < d_num_u_candidate_vs_[u])
     {
-      auto group = cooperative_groups::coalesced_threads();
       vtype can_v = d_u_candidate_vs_[u * C_MAX_L_FREQ + idx];
       if (can_v != UINT32_MAX)
       {
@@ -1055,9 +1061,8 @@ compactCandidatesKernel(
           warp_pos[wid] = atomicAdd(&d_num_u_candidate_vs_new_[u], g.size());
         g.sync();
         int my_pos = warp_pos[wid] + rank;
-        d_u_candidate_vs_[u * C_MAX_L_FREQ + my_pos] = can_v;
+        d_u_candidate_vs_new_[u * C_MAX_L_FREQ + my_pos] = can_v;
       }
-      group.sync();
     }
     __syncwarp();
   }
@@ -1289,10 +1294,10 @@ void clusterFilter(
     encodingMeta *enc_meta,
 
     // return
-    vtype *h_u_candidate_vs_, numtype *h_num_u_candidate_vs_,
-    vtype *d_u_candidate_vs_, numtype *d_num_u_candidate_vs_,
-    vtype *h_v_candidate_us_, numtype *h_num_v_candidate_us_,
-    vtype *d_v_candidate_us_, numtype *d_num_v_candidate_us_)
+    vtype *&h_u_candidate_vs_, numtype *&h_num_u_candidate_vs_,
+    vtype *&d_u_candidate_vs_, numtype *&d_num_u_candidate_vs_,
+    vtype *&h_v_candidate_us_, numtype *&h_num_v_candidate_us_,
+    vtype *&d_v_candidate_us_, numtype *&d_num_v_candidate_us_)
 {
   // clustering
   clustering(hq, cpu_clusters_, enc_meta);
@@ -1342,12 +1347,18 @@ void clusterFilter(
   cuchk(cudaMalloc((void **)&d_num_u_candidate_vs_new_, sizeof(numtype) * NUM_VQ));
   cuchk(cudaMemset(d_num_u_candidate_vs_new_, 0, sizeof(numtype) * NUM_VQ));
 
+  vtype *d_u_candidate_vs_new_ = nullptr;
+  cuchk(cudaMalloc((void **)&d_u_candidate_vs_new_, sizeof(vtype) * NUM_VQ * MAX_L_FREQ));
+  cuchk(cudaMemset(d_u_candidate_vs_new_, UINT32_MAX, sizeof(vtype) * NUM_VQ * MAX_L_FREQ));
+
   compactCandidatesKernel<<<GRID_DIM, BLOCK_DIM>>>(
       d_u_candidate_vs_, d_num_u_candidate_vs_,
-      d_num_u_candidate_vs_new_);
+      d_u_candidate_vs_new_, d_num_u_candidate_vs_new_);
   cuchk(cudaDeviceSynchronize());
   std::swap(d_num_u_candidate_vs_, d_num_u_candidate_vs_new_);
+  std::swap(d_u_candidate_vs_, d_u_candidate_vs_new_);
   cuchk(cudaFree(d_num_u_candidate_vs_new_));
+  cuchk(cudaFree(d_u_candidate_vs_new_));
 
   cuchk(cudaMemcpy(h_encodings_, d_encodings_, sizeof(uint32_t) * NUM_VD * enc_meta->num_bytes, cudaMemcpyDeviceToHost));
 
