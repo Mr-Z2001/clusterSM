@@ -8,7 +8,7 @@
 #define WARP_SIZE 32u
 #define WARP_PER_BLOCK 16u
 
-#define MAX_VQ 16u
+#define MAX_VQ 32
 #define MAX_EQ 64u
 #define MAX_VLQ 16u
 

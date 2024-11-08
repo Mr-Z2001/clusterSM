@@ -70,6 +70,7 @@ struct encodingMeta
 	// layer info
 	numtype num_layers;
 	numtype *num_clusters_per_layer_;
+	offtype *layer_offsets_;
 
 	// merge
 	numtype merge_count;						// how many times did the merge happen.

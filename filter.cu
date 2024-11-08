@@ -8,6 +8,7 @@
 #include <cooperative_groups.h>
 
 #include <set>
+#include <stack>
 
 #include "order.h"
 #include "memManag.cuh"
@@ -77,11 +78,24 @@ oneRoundFilterCG(
   __syncwarp();
 }
 
-void getVertexCoverHeuristic(
-    cpuGraph *hq,
-    // return
-    vtype *vertex_cover_, numtype *num_vertex_covers)
+void dfs_cvc(
+    vtype cur_v,
+    vtype cur_v_father,
+    int **f,
+    cpuGraph *hq)
 {
+  f[cur_v][0] = 0;
+  f[cur_v][1] = 1;
+
+  for (offtype v_nbr_off = hq->offsets_[cur_v]; v_nbr_off < hq->offsets_[cur_v + 1]; ++v_nbr_off)
+  {
+    vtype v_nbr = hq->neighbors_[v_nbr_off];
+    if (v_nbr == cur_v_father)
+      continue;
+    dfs_cvc(v_nbr, cur_v, f, hq);
+    f[cur_v][0] += f[v_nbr][1];
+    f[cur_v][1] += min(f[v_nbr][0], f[v_nbr][1]);
+  }
 }
 
 void getVertexCover(
@@ -89,112 +103,70 @@ void getVertexCover(
     // return
     vtype *vertex_cover_, numtype *num_vertex_covers)
 {
-  std::set<vtype> vertex_cover;
+  int **f = new int *[MAX_VQ];
+  for (int i = 0; i < MAX_VQ; ++i)
+    f[i] = new int[2];
 
-  bool all_edges_visited = false;
-  bool *vis_e = new bool[hq->num_e * 2];
-  bool *vis_v = new bool[hq->num_v];
-  memset(vis_e, false, sizeof(bool) * hq->num_e * 2);
-  memset(vis_v, false, sizeof(bool) * hq->num_v);
-  etype e = 0;
-  while (!all_edges_visited)
+  vtype root = 0;
+  for (vtype u = 1; u < hq->num_v; ++u)
   {
-    if (e >= hq->num_e * 2)
-    {
-      all_edges_visited = true;
-      break;
-    }
-    if (!hq->keep[e] || vis_e[e])
-    {
-      e += 2;
-      continue;
-    }
-    vtype u = hq->evv[e].first;
-    vtype v = hq->evv[e].second;
-    vis_e[e] = true;
-    if ((e & 1) == 0)
-    {
-      if (hq->outdeg_[u] == 1 || hq->outdeg_[v] == 1)
-      {
-        if (hq->outdeg_[u] == 1)
-          vertex_cover.insert(v);
-        else
-          vertex_cover.insert(u);
-        vis_v[u] = vis_v[v] = true;
-      }
-      // else
-      // {
-      //   vertex_cover.insert(u);
-      //   vertex_cover.insert(v);
-      // }
-      else
-      {
-        bool flag_u_nbrs_all_visited = true;
-        for (offtype u_nbr_off = hq->offsets_[u]; u_nbr_off < hq->offsets_[u + 1]; ++u_nbr_off)
-        {
-          vtype u_nbr = hq->neighbors_[u_nbr_off];
-          if (!vis_v[u_nbr])
-          {
-            if (u_nbr == v)
-              continue;
-            flag_u_nbrs_all_visited = false;
-            break;
-          }
-        }
-        if (!flag_u_nbrs_all_visited)
-        {
-          vertex_cover.insert(u);
-          vis_v[u] = true;
-          bool flag_v_nbrs_all_visited = true;
-          for (offtype v_nbr_off = hq->offsets_[v]; v_nbr_off < hq->offsets_[v + 1]; ++v_nbr_off)
-          {
-            vtype v_nbr = hq->neighbors_[v_nbr_off];
-            if (!vis_v[v_nbr])
-            {
-              flag_v_nbrs_all_visited = false;
-              break;
-            }
-          }
-          if (!flag_v_nbrs_all_visited)
-            vertex_cover.insert(v);
-        }
-        else // if (flag_u_nbrs_all_visited)
-          vertex_cover.insert(v);
-      }
-      if (vertex_cover.find(u) != vertex_cover.end())
-        for (offtype u_off = hq->offsets_[u]; u_off < hq->offsets_[u + 1]; ++u_off)
-        {
-          vtype u_nbr = hq->neighbors_[u_off];
-          etype e_nbr = hq->vve[{u, u_nbr}];
-          // if (!hq->keep[e_nbr])
-          //   continue;
-          vis_e[e_nbr] = true;
-          etype e_nbr_reverse = hq->vve[{u_nbr, u}];
-          // if (!hq->keep[e_nbr_reverse])
-          //   continue;
-          vis_e[e_nbr_reverse] = true;
-        }
-      if (vertex_cover.find(v) != vertex_cover.end())
-        for (offtype v_off = hq->offsets_[v]; v_off < hq->offsets_[v + 1]; ++v_off)
-        {
-          vtype v_nbr = hq->neighbors_[v_off];
-          etype e_nbr = hq->vve[{v, v_nbr}];
-          // if (!hq->keep[e_nbr])
-          //   continue;
-          vis_e[e_nbr] = true;
-          etype e_nbr_reverse = hq->vve[{v_nbr, v}];
-          // if (!hq->keep[e_nbr_reverse])
-          //   continue;
-          vis_e[e_nbr_reverse] = true;
-        }
-    }
-    e += 2;
+    if (hq->outdeg_[u] > hq->outdeg_[root])
+      root = u;
   }
-  delete[] vis_e;
-  num_vertex_covers[0] = vertex_cover.size();
-  int i = 0;
-  for (auto v : vertex_cover)
-    vertex_cover_[i++] = v;
+  dfs_cvc(root, -1, f, hq);
+  *num_vertex_covers = min(f[root][0], f[root][1]);
+
+  // top-down select vertex cover
+  int cover_index = 0;
+  std::stack<vtype> st;
+  std::stack<vtype> st_father;
+  std::stack<bool> stf_selected;
+  st.push(root);
+  st_father.push(-1);
+  stf_selected.push(false);
+  while (!st.empty())
+  {
+    vtype cur_v = st.top();
+    st.pop();
+    vtype cur_v_father = st_father.top();
+    st_father.pop();
+    bool father_selected = stf_selected.top();
+    stf_selected.pop();
+
+    if (f[cur_v][1] <= f[cur_v][0])
+    {
+      vertex_cover_[cover_index++] = cur_v;
+
+      for (offtype v_nbr_off = hq->offsets_[cur_v]; v_nbr_off < hq->offsets_[cur_v + 1]; ++v_nbr_off)
+      {
+        vtype v_nbr = hq->neighbors_[v_nbr_off];
+        if (v_nbr == cur_v_father)
+          continue;
+        st.push(v_nbr);
+        st_father.push(cur_v);
+        stf_selected.push(true);
+      }
+    }
+    else
+    {
+      if (father_selected)
+        father_selected = false;
+      else // father NOT selected
+      {
+        vertex_cover_[cover_index++] = cur_v;
+        father_selected = true;
+      }
+      for (offtype v_nbr_off = hq->offsets_[cur_v]; v_nbr_off < hq->offsets_[cur_v + 1]; ++v_nbr_off)
+      {
+        vtype v_nbr = hq->neighbors_[v_nbr_off];
+        if (v_nbr == cur_v_father)
+          continue;
+        st.push(v_nbr);
+        st_father.push(cur_v);
+        stf_selected.push(father_selected);
+      }
+    }
+  }
 }
 
 // TODO: change it to an array of `T*`(i.e. T** for an 1-d array), save `new` and `delete` operations.
@@ -233,9 +205,6 @@ void clustering(
 
   cpu_clusters_ = new cpuCluster[MAX_CLUSTERS];
 
-  enc_meta->is_a_valid_cluster_ = new bool[MAX_CLUSTERS];
-  memset(enc_meta->is_a_valid_cluster_, true, sizeof(bool) * MAX_CLUSTERS);
-
   for (int i = 0; i < num_clusters; ++i)
   {
     // aliases for simplicity.
@@ -255,9 +224,8 @@ void clustering(
   numtype num_new_clusters = 0;
   numtype num_actual_new_clusters = 0; // `new_cluster - combined_cluster`, assigned arbitrarily, larger than 1.
   int layer_index = 0;
-  int *num_clusters_per_layer_ = new int[MAX_LAYERS]; // I don't know actually how many layers would be, but definitely less than 100.
-  memset(num_clusters_per_layer_, 0, sizeof(int) * MAX_LAYERS);
-  num_clusters_per_layer_[0] = num_clusters;
+
+  enc_meta->num_clusters_per_layer_[0] = num_clusters;
 
   int i = 0;
 
@@ -456,18 +424,38 @@ void clustering(
     }
 
     num_clusters += num_new_clusters;
-    num_clusters_per_layer_[layer_index] = num_new_clusters;
-    std::cout << "layer " << layer_index << " num_clusters: " << num_clusters << std::endl;
+    enc_meta->num_clusters_per_layer_[layer_index] = num_new_clusters;
+    std::cout << "layer " << layer_index << " num_clusters: " << num_clusters << " num_actual_new_clusters: " << num_actual_new_clusters << std::endl;
   } while (num_actual_new_clusters > 1);
+
+  enc_meta->combine_checkpoints_[layer_index] = num_clusters;
+
+  for (int l_index = 1; l_index <= layer_index; ++l_index)
+  {
+    enc_meta->layer_offsets_[l_index] = enc_meta->layer_offsets_[l_index - 1] + enc_meta->num_clusters_per_layer_[l_index - 1];
+  }
+  enc_meta->layer_offsets_[layer_index + 1] = num_clusters;
+
+#ifndef NDEBUG
+  std::cout << "see checkpoints: " << std::endl;
+  for (int i = 0; i < layer_index + 1; ++i)
+  {
+    std::cout << "Layer " << i << " checkpoint: " << enc_meta->combine_checkpoints_[i] << std::endl;
+  }
+
+  std::cout << "see layer index: " << std::endl;
+  for (int i = 0; i <= layer_index; ++i)
+  {
+    std::cout << "Layer " << i << " offset: " << enc_meta->layer_offsets_[i] << std::endl;
+  }
+
+#endif
 
   // construct meta
   enc_meta->init(cpu_clusters_);
-  enc_meta->num_layers = layer_index;
-  enc_meta->num_clusters_per_layer_ = new numtype[enc_meta->num_layers];
-  memcpy(enc_meta->num_clusters_per_layer_, num_clusters_per_layer_, sizeof(numtype) * enc_meta->num_layers);
+  enc_meta->num_layers = layer_index + 1;
 
   delete[] vertex_cover_;
-  delete[] num_clusters_per_layer_;
 }
 
 __global__ void
@@ -959,7 +947,11 @@ combineMultipleClustersKernel(
   if (tid == 0)
     s_big_pos = cluster_offsets_[big_cluster];
   if (tid < num_small_clusters)
-    s_small_pos[tid] = cluster_offsets_[small_clusters_arr_[tid]];
+  {
+    int small_cluster = small_clusters_arr_[tid];
+    int pos = cluster_offsets_[small_cluster];
+    s_small_pos[tid] = pos;
+  }
   __syncthreads();
 
   // TODO: only pick core_u's candidates.
@@ -1203,6 +1195,14 @@ void encode(
             exit(1);
           }
 
+#ifndef NDEBUG
+          std::cout << "layer: " << layer_index << " ";
+          std::cout << "small clusters: ";
+          for (int i = 0; i < num_small_clusters; ++i)
+            std::cout << small_clusters_arr[i] << " ";
+          std::cout << std::endl;
+#endif
+
           cuchk(cudaMemcpy(d_small_clusters_, small_clusters_arr, sizeof(int) * num_small_clusters, cudaMemcpyHostToDevice));
 
           vtype core_u = cpu_clusters_[big_cluster].query_us_[0];
@@ -1220,8 +1220,17 @@ void encode(
           ++combine_ptr;
         }
 #ifndef NDEBUG
-        std::cout << "combine for layer " << layer_index - 1 << " done" << std::endl;
+        std::cout << "combine for layer " << layer_index << " done" << std::endl;
 #endif
+      }
+
+      // goto next layer
+
+      // TODO: fix it !!!!!!!!!
+      if (cluster_index != enc_meta->layer_offsets_[layer_index + 1])
+      {
+        cluster_index = enc_meta->layer_offsets_[layer_index + 1] - 1;
+        continue;
       }
     }
 

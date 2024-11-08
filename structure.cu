@@ -154,11 +154,15 @@ encodingMeta::encodingMeta()
   num_bytes = 0;
   query_us_compact_ = nullptr;
   cluster_offsets_ = nullptr;
-  is_a_valid_cluster_ = nullptr;
+  is_a_valid_cluster_ = new bool[MAX_CLUSTERS];
+  memset(is_a_valid_cluster_, true, sizeof(bool) * MAX_CLUSTERS);
 
   // layer
   num_layers = 0;
-  num_clusters_per_layer_ = nullptr;
+  num_clusters_per_layer_ = new numtype[MAX_LAYERS];
+  memset(num_clusters_per_layer_, 0, sizeof(numtype) * MAX_LAYERS);
+  layer_offsets_ = new offtype[MAX_LAYERS];
+  memset(layer_offsets_, 0, sizeof(offtype) * MAX_LAYERS);
 
   // merge
   merge_count = 0;
@@ -174,7 +178,7 @@ encodingMeta::encodingMeta()
   combine_type_ = nullptr;
 
   combine_checkpoints_ = new int[MAX_LAYERS];
-  combine_checkpoints_[0] = -1;
+  memset(combine_checkpoints_, -1, sizeof(int) * MAX_LAYERS);
 }
 
 encodingMeta::~encodingMeta()

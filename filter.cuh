@@ -16,12 +16,7 @@ oneRoundFilterCG(
 		vltype *d_v_labels_, degtype *d_v_degrees_,
 		uint32_t *d_bitmap, size_t bitmap_pitch);
 
-void getVertexCover( // 2-Approximation
-		cpuGraph *hq,
-		// return
-		vtype *vertex_cover_, numtype *vertex_cover_size);
-
-void getVertexCoverHeuristic( // Greedy
+void getVertexCover( // DP on spanning tree.
 		cpuGraph *hq,
 		// return
 		vtype *vertex_cover_, numtype *vertex_cover_size);
