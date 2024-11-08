@@ -213,10 +213,6 @@ void joinOneEdge(
   bool *d_flag_;
   num_res_new = 0;
 
-#ifndef NDEBUG
-  std::cout << "NUM_VD: " << NUM_VD << std::endl;
-#endif
-
   cuchk(cudaMalloc((void **)&d_flag_, sizeof(bool) * NUM_VD));
   cuchk(cudaMemset(d_flag_, false, sizeof(bool) * NUM_VD));
 
@@ -236,6 +232,7 @@ void joinOneEdge(
   }
   if (enc_pos == -1)
   {
+    std::cerr << "u: " << u << ", u_matched: " << u_matched << std::endl;
     std::cerr << "Error! Enc_pos == -1, unexpected." << std::endl;
     exit(1);
   }
@@ -294,7 +291,6 @@ void join(
 
   // make sure all the swap operations are done in this function, not inside sub-functions.
 
-  numtype MAX_RES = 5000000; // 5e6
   numtype num_res_old = 0;
   vtype *d_res_table_;
   cuchk(cudaMalloc((void **)&d_res_table_, sizeof(vtype) * NUM_VQ * MAX_RES));
@@ -348,27 +344,27 @@ void join(
       cuchk(cudaMemset(d_num_res_new, 0, sizeof(numtype)));
 
       int enc_pos_u = -1, enc_pos_u_matched = -1;
-      for (int cluster_index = enc_meta->num_clusters - 1; ~cluster_index; --cluster_index)
-      {
-        enc_pos_u = -1, enc_pos_u_matched = -1;
-        bool found_u = false, found_u_matched = false;
-        for (int i = 0; i < enc_meta->num_query_us_[cluster_index]; ++i)
-        {
-          found_u = found_u || (cpu_clusters_[cluster_index].query_us_[i] == u);
-          if (found_u)
-            enc_pos_u = enc_meta->cluster_offsets_[cluster_index] + i;
-          found_u_matched = found_u_matched || (cpu_clusters_[cluster_index].query_us_[i] == u_matched);
-          if (found_u_matched)
-            enc_pos_u_matched = enc_meta->cluster_offsets_[cluster_index] + i;
-        }
-        if (found_u && found_u_matched)
-          break;
-      }
-      if (enc_pos_u == -1 || enc_pos_u_matched == -1)
-      {
-        std::cerr << "Error: enc_pos_u == -1 || enc_pos_u_matched == -1" << std::endl;
-        exit(1);
-      }
+      // for (int cluster_index = enc_meta->num_clusters - 1; ~cluster_index; --cluster_index)
+      // {
+      //   enc_pos_u = -1, enc_pos_u_matched = -1;
+      //   bool found_u = false, found_u_matched = false;
+      //   for (int i = 0; i < enc_meta->num_query_us_[cluster_index]; ++i)
+      //   {
+      //     found_u = found_u || (cpu_clusters_[cluster_index].query_us_[i] == u);
+      //     if (found_u)
+      //       enc_pos_u = enc_meta->cluster_offsets_[cluster_index] + i;
+      //     found_u_matched = found_u_matched || (cpu_clusters_[cluster_index].query_us_[i] == u_matched);
+      //     if (found_u_matched)
+      //       enc_pos_u_matched = enc_meta->cluster_offsets_[cluster_index] + i;
+      //   }
+      //   if (found_u && found_u_matched)
+      //     break;
+      // }
+      // if (enc_pos_u == -1 || enc_pos_u_matched == -1)
+      // {
+      //   std::cerr << "Error: enc_pos_u == -1 || enc_pos_u_matched == -1" << std::endl;
+      //   exit(1);
+      // }
 
       selectPartialMatchingsKernel<<<GRID_DIM, BLOCK_DIM>>>(
           dg->offsets_, dg->neighbors_,

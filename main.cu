@@ -144,8 +144,6 @@ int main(int argc, char **argv)
 	std::cout << std::endl;
 #endif
 
-	numtype MAX_RES = 5000000; // 5e6
-
 	vtype *h_res_table = new vtype[MAX_RES * NUM_VQ]; // around 4.5 MB.
 	numtype num_res = 0;
 	join(

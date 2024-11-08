@@ -15,12 +15,14 @@
 #define MAX_CLUSTERS 150
 #define MAX_LAYERS 100
 
-#define MAX_CUCKOO_LOOP 64u
-#define BUCKET_DIM 8u
-#define CUCKOO_SCALE_PER_TABLE 2u
-#define NUM_TABLE 2u
+#define MAX_RES 100000000
 
-#define MAX_RES_MEM_SPACE 6000000000ul
+// #define MAX_CUCKOO_LOOP 64u
+// #define BUCKET_DIM 8u
+// #define CUCKOO_SCALE_PER_TABLE 2u
+// #define NUM_TABLE 2u
+
+// #define MAX_RES_MEM_SPACE 6000000000ul
 
 using vtype = uint32_t;
 using etype = uint32_t;
