@@ -91,6 +91,7 @@ int main(int argc, char **argv)
 	cuchk(cudaMalloc((void **)&d_u_candidate_vs_, sizeof(vtype) * NUM_VQ * MAX_L_FREQ));
 	cuchk(cudaMemset(d_u_candidate_vs_, -1, sizeof(vtype) * NUM_VQ * MAX_L_FREQ));
 	h_v_candidate_us_ = new vtype[NUM_VD];
+	memset(h_v_candidate_us_, -1, sizeof(vtype) * NUM_VD);
 	cuchk(cudaMalloc((void **)&d_v_candidate_us_, sizeof(vtype) * NUM_VD));
 	cuchk(cudaMemset(d_v_candidate_us_, -1, sizeof(vtype) * NUM_VD));
 
@@ -130,6 +131,16 @@ int main(int argc, char **argv)
 	std::cout << std::dec << std::endl;
 	std::cout << "filter done" << std::endl;
 	enc_meta.print();
+
+	for (vtype u = 0; u < NUM_VQ; ++u)
+	{
+		std::cout << "u: " << u << " " << h_num_u_candidate_vs_[u] << std::endl;
+		for (int i = 0; i < h_num_u_candidate_vs_[u]; ++i)
+		{
+			std::cout << h_u_candidate_vs_[u * MAX_L_FREQ + i] << " ";
+		}
+		std::cout << std::endl;
+	}
 #endif
 
 	vtype root = enc_meta.query_us_compact_[enc_meta.cluster_offsets_[enc_meta.num_clusters - 1]];

@@ -53,6 +53,11 @@ void oneRoundFilterReverse(
 		uint32_t *d_bitmap_, size_t bitmap_pitch,
 		vtype *d_v_candidate_us_, numtype *d_num_v_candidates_);
 
+__global__ void
+compactCandidatesKernel(
+		vtype *d_u_candidate_vs_, numtype *d_num_u_candidate_vs_,
+		numtype *d_num_u_candidate_vs_new_);
+
 void encode(
 		gpuGraph *dg,
 		cpuCluster *cpu_clusters_, gpuCluster *gpu_clusters_,

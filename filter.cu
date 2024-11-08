@@ -874,7 +874,7 @@ mergeKernel(
   int lid = tid % warpSize;
   int wid_g = idx / warpSize;
 
-  __shared__ vtype s_core_v[WARP_PER_BLOCK];
+  __shared__ vtype s_core_v[WARP_PER_BLOCK]; // one warp one cluster.
   __shared__ bool s_core_v_valid[WARP_PER_BLOCK];
 
   if (lid == 0)
@@ -887,7 +887,7 @@ mergeKernel(
   }
   else
     return;
-  __syncthreads();
+  __syncwarp();
 
   // encode core vertex
   vtype core_v = s_core_v[wid];
@@ -909,11 +909,13 @@ mergeKernel(
   }
   __syncwarp();
 
+  core_v = s_core_v[wid];
   if (core_v != UINT32_MAX)
   {
     offtype nbr_off = d_offsets_[core_v] + lid;
     while (nbr_off < d_offsets_[core_v + 1])
     {
+      auto group = cooperative_groups::coalesced_threads();
       vtype v_nbr = d_nbrs_[nbr_off];
       for (int i = 1; i < enc_num_query_us_[cluster_index]; ++i)
       {
@@ -921,7 +923,7 @@ mergeKernel(
         if (d_v_candidate_us_[v_nbr] & (1 << tobe_map_u))
           atomicOr(&encodings_[v_nbr * enc_num_bytes + (enc_pos + i) / 32], 1 << ((enc_pos + i) % 32));
         // TODO: optimize using bitmap. fast check.
-        __syncwarp();
+        group.sync();
       }
       nbr_off += warpSize;
     }
@@ -1022,6 +1024,42 @@ combineMultipleClustersKernel(
     }
 
     v_nbr_off += warpSize;
+  }
+}
+
+__global__ void
+compactCandidatesKernel(
+    vtype *d_u_candidate_vs_, numtype *d_num_u_candidate_vs_,
+    numtype *d_num_u_candidate_vs_new_)
+{
+  int tid = threadIdx.x;
+  int bid = blockIdx.x;
+  int idx = tid + bid * blockDim.x;
+  int wid = tid / warpSize;
+  int lid = tid % warpSize;
+  int wid_g = idx / warpSize;
+
+  __shared__ int warp_pos[WARP_PER_BLOCK];
+
+  for (vtype u = 0; u < C_NUM_VQ; ++u)
+  {
+    if (idx < d_num_u_candidate_vs_[u])
+    {
+      auto group = cooperative_groups::coalesced_threads();
+      vtype can_v = d_u_candidate_vs_[u * C_MAX_L_FREQ + idx];
+      if (can_v != UINT32_MAX)
+      {
+        auto g = cooperative_groups::coalesced_threads();
+        int rank = g.thread_rank();
+        if (rank == 0)
+          warp_pos[wid] = atomicAdd(&d_num_u_candidate_vs_new_[u], g.size());
+        g.sync();
+        int my_pos = warp_pos[wid] + rank;
+        d_u_candidate_vs_[u * C_MAX_L_FREQ + my_pos] = can_v;
+      }
+      group.sync();
+    }
+    __syncwarp();
   }
 }
 
@@ -1299,6 +1337,17 @@ void clusterFilter(
 #ifndef NDEBUG
   std::cout << "encode done" << std::endl;
 #endif
+
+  numtype *d_num_u_candidate_vs_new_ = nullptr;
+  cuchk(cudaMalloc((void **)&d_num_u_candidate_vs_new_, sizeof(numtype) * NUM_VQ));
+  cuchk(cudaMemset(d_num_u_candidate_vs_new_, 0, sizeof(numtype) * NUM_VQ));
+
+  compactCandidatesKernel<<<GRID_DIM, BLOCK_DIM>>>(
+      d_u_candidate_vs_, d_num_u_candidate_vs_,
+      d_num_u_candidate_vs_new_);
+  cuchk(cudaDeviceSynchronize());
+  std::swap(d_num_u_candidate_vs_, d_num_u_candidate_vs_new_);
+  cuchk(cudaFree(d_num_u_candidate_vs_new_));
 
   cuchk(cudaMemcpy(h_encodings_, d_encodings_, sizeof(uint32_t) * NUM_VD * enc_meta->num_bytes, cudaMemcpyDeviceToHost));
 
