@@ -15,8 +15,8 @@ set(CMAKE_CUDA_LIBRARY_ARCHITECTURES 86) # A6000
 # set(CMAKE_CUDA_LIBRARY_ARCHITECTURES 75) # 2080Ti
 # set(CUDA_NVCC_FLAGS "${CUDA_NVCC_FLAGS} -lineinfo")
 
-include_directories(/usr/local/cuda-12.4/include) # active at school
-link_directories(/usr/local/cuda-12.4/lib64) # active at home
+include_directories(/usr/local/cuda-12.1/include) # active at school
+link_directories(/usr/local/cuda-12.1/lib64) # active at home
 
 # library
 add_library(link STATIC
