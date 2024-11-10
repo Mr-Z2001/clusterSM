@@ -15,6 +15,8 @@
 #define MAX_CLUSTERS 150
 #define MAX_LAYERS 100
 
+#define ENC_SIZE 32
+
 #define MAX_RES 100000000
 
 // #define MAX_CUCKOO_LOOP 64u

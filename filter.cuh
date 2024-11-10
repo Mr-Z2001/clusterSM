@@ -64,23 +64,15 @@ __global__ void encodeKernel(
 		// graph info
 		offtype *d_offsets_, vtype *d_nbrs_,
 		// candidate vertices
-		vtype core_u, uint32_t layer_index, uint32_t cluster_index,
+		vtype core_u, uint32_t cluster_index,
 		vtype *d_u_candidate_vs_, numtype *d_num_u_candidate_vs_,
-		vtype *d_v_candidate_us_, numtype *d_num_v_candidate_us_,
+		vtype *d_v_candidate_us_,
 		// uint32_t *d_bitmap_reverse_, numtype d_bitmap_reverse_width,
 
 		// encoding info
 		uint32_t *encodings_,
-
-		numtype enc_num_clusters, numtype *enc_num_query_us_,
-		numtype enc_num_total_us, numtype enc_num_bytes,
-		vtype *enc_query_us_compact_, offtype *enc_cluster_offsets_,
-
-		numtype enc_num_layers, numtype *enc_num_clusters_per_layer_,
-
-		numtype enc_merge_count,
-		numtype *enc_merged_cluster_left_, numtype *enc_merged_cluster_right_,
-		vtype *enc_merged_cluster_vertex_, numtype *enc_merged_cluster_layer_);
+		numtype *enc_num_query_us_, numtype enc_num_blocks,
+		vtype *enc_query_us_compact_, offtype *enc_cluster_offsets_);
 
 __global__ void
 mergeKernel(
@@ -97,7 +89,7 @@ mergeKernel(
 		uint32_t *encodings_,
 
 		numtype enc_num_clusters, numtype *enc_num_query_us_,
-		numtype enc_num_total_us, numtype enc_num_bytes,
+		numtype enc_num_total_us, numtype enc_num_blocks,
 		vtype *enc_query_us_compact_, offtype *enc_cluster_offsets_,
 
 		numtype enc_num_layers, numtype *enc_num_clusters_per_layer_,
@@ -112,10 +104,17 @@ combineMultipleClustersKernel(
 		vtype core_u, bool combine_type,
 		int big_cluster, int *small_clusters_arr_, int num_small_clusters,
 		uint32_t *d_encodings_,
-		numtype num_clusters, numtype *num_query_us_,
-		numtype num_total_us, numtype num_blocks,
+		numtype *num_query_us_,
+		numtype num_blocks,
 		vtype *query_us_compact_, offtype *cluster_offsets_,
 		vtype *d_u_candidate_vs_, numtype *d_num_u_candidate_vs_);
+
+__global__ void
+collectCandidatesKernel(
+		vtype *d_u_candidate_vs_, vtype *d_num_u_candidate_vs_,
+		vtype *d_v_candidate_us_, vtype *d_num_v_candidate_us_,
+		uint32_t *d_encodings_, int *d_pos_array_, vtype *d_query_us_compact_,
+		int num_blocks);
 
 void clusterFilter(
 		cpuGraph *hq_backup, gpuGraph *dq_backup,

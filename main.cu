@@ -36,7 +36,9 @@ int main(int argc, char **argv)
 	int device = gpu_num;
 	cudaDeviceProp prop;
 	cudaGetDeviceProperties(&prop, device);
+#ifndef NDEBUG
 	cout << "Device " << device << ": " << prop.name << endl;
+#endif
 	cudaSetDevice(device);
 	GPU_NUM = gpu_num;
 

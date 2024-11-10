@@ -107,12 +107,12 @@ joinOneEdgeKernel(
 
   __shared__ vtype s_v[WARP_PER_BLOCK];
 
-  if (idx == 0)
-  {
-    printf("u = %d, u_matched = %d\n", u, u_matched);
-    printf("num_res_old: %d\n", num_res_old);
-    printf("enc_pos = %d\n", enc_pos);
-  }
+  // if (idx == 0)
+  // {
+  //   printf("u = %d, u_matched = %d\n", u, u_matched);
+  //   printf("num_res_old: %d\n", num_res_old);
+  //   printf("enc_pos = %d\n", enc_pos);
+  // }
   __syncthreads();
 
   // one warp one row
@@ -135,8 +135,8 @@ joinOneEdgeKernel(
     {
       auto group = cooperative_groups::coalesced_threads();
       vtype v_nbr = nbrs_[v_nbr_off];
-      // if (v_candidate_us_[v_nbr] & (1 << u))
-      if (encodings_[v_nbr * num_blocks + enc_pos / 32] & (1 << (enc_pos % 32)))
+      // if (v_candidate_us_[v_nbr] & (1u << u))
+      if (encodings_[v_nbr * num_blocks + enc_pos / ENC_SIZE] & (1u << (enc_pos % ENC_SIZE)))
       {
         bool same_flag = false;
         for (int i = 0; i < C_NUM_VQ; ++i)
@@ -303,15 +303,15 @@ void join(
   // first Join initialize res_table.
   vtype u = hq->evv[order[0]].first;
 
-#ifndef NDEBUG
-  std::cout << "first join u: " << u << std::endl;
-  std::cout << "num candidates: " << h_num_u_candidate_vs_[u] << std::endl;
-  for (int i = 0; i < h_num_u_candidate_vs_[u]; ++i)
-  {
-    std::cout << h_u_candidate_vs_[u * C_MAX_L_FREQ + i] << " ";
-  }
-  std::cout << std::endl;
-#endif
+  // #ifndef NDEBUG
+  //   std::cout << "first join u: " << u << std::endl;
+  //   std::cout << "num candidates: " << h_num_u_candidate_vs_[u] << std::endl;
+  //   for (int i = 0; i < h_num_u_candidate_vs_[u]; ++i)
+  //   {
+  //     std::cout << h_u_candidate_vs_[u * C_MAX_L_FREQ + i] << " ";
+  //   }
+  //   std::cout << std::endl;
+  // #endif
 
   firstJoinKernel<<<GRID_DIM, BLOCK_DIM>>>(
       u,
