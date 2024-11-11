@@ -22,12 +22,12 @@ selectPartialMatchingsKernel(
     uint32_t *d_encodings_, numtype num_blocks,
     uint32_t enc_pos_u, uint32_t enc_pos_u_matched)
 {
-  uint tid = threadIdx.x;
-  uint bid = blockIdx.x;
-  uint idx = tid + bid * blockDim.x;
-  uint wid = tid / warpSize;
-  uint lid = tid % warpSize;
-  uint wid_g = idx / warpSize;
+  uint32_t tid = threadIdx.x;
+  uint32_t bid = blockIdx.x;
+  uint32_t idx = tid + bid * blockDim.x;
+  uint32_t wid = tid / warpSize;
+  uint32_t lid = tid % warpSize;
+  uint32_t wid_g = idx / warpSize;
 
   __shared__ int warp_pos[WARP_PER_BLOCK];
   if (lid == 0)
@@ -69,9 +69,9 @@ firstJoinKernel(
     vtype *d_u_candidate_vs_, numtype num_u_candidate_vs,
     vtype *d_res_table_)
 {
-  uint tid = threadIdx.x;
-  uint bid = blockIdx.x;
-  uint idx = tid + bid * blockDim.x;
+  uint32_t tid = threadIdx.x;
+  uint32_t bid = blockIdx.x;
+  uint32_t idx = tid + bid * blockDim.x;
 
   if (idx < num_u_candidate_vs)
   {
@@ -98,12 +98,12 @@ joinOneEdgeKernel(
     int *num_candidates_in_buffer,
     bool *flag_)
 {
-  uint tid = threadIdx.x;
-  uint bid = blockIdx.x;
-  uint idx = tid + bid * blockDim.x;
-  uint wid = tid / warpSize;
-  uint lid = tid % warpSize;
-  uint wid_g = idx / warpSize;
+  uint32_t tid = threadIdx.x;
+  uint32_t bid = blockIdx.x;
+  uint32_t idx = tid + bid * blockDim.x;
+  uint32_t wid = tid / warpSize;
+  uint32_t lid = tid % warpSize;
+  uint32_t wid_g = idx / warpSize;
 
   __shared__ vtype s_v[WARP_PER_BLOCK];
 
@@ -164,11 +164,11 @@ collectMappedVs(
     bool *d_flag_,
     vtype *d_res_table_old_, numtype num_res_old)
 {
-  uint tid = threadIdx.x;
-  uint bid = blockIdx.x;
-  uint idx = tid + bid * blockDim.x;
-  uint wid = tid / warpSize;
-  uint lid = tid % warpSize;
+  uint32_t tid = threadIdx.x;
+  uint32_t bid = blockIdx.x;
+  uint32_t idx = tid + bid * blockDim.x;
+  uint32_t wid = tid / warpSize;
+  uint32_t lid = tid % warpSize;
 
   // TODO: optimize this. reduce write conflicts.
   // __shared__ vtype mapped_vs[WARP_PER_BLOCK][WARP_SIZE];

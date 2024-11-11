@@ -3,7 +3,7 @@
 
 #include <cstdint>
 
-#define GRID_DIM ((1 << 20) - 1)
+#define GRID_DIM 1024u
 #define BLOCK_DIM 512u
 #define WARP_SIZE 32u
 #define WARP_PER_BLOCK 16u
@@ -33,5 +33,12 @@ using numtype = uint32_t;
 using offtype = uint32_t;
 using degtype = uint32_t;
 // using eltype = uint32_t;
+
+inline unsigned int calc_grid_dim(int N, int block_size)
+{
+  if (N == 0)
+    ++N;
+  return (N - 1) / block_size + 1;
+}
 
 #endif

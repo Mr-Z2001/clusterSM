@@ -65,11 +65,13 @@ compactCandidatesKernel(
 void encode(
 		gpuGraph *dg,
 		cpuCluster *cpu_clusters_, gpuCluster *gpu_clusters_,
-		uint32_t *h_encodings_, uint32_t *d_encodings_, encodingMeta *encoding_meta,
+		uint32_t *h_encodings_, uint32_t *d_encodings_, encodingMeta *enc_meta,
+		numtype *h_num_u_candidate_vs_,
 		vtype *d_u_candidate_vs_, numtype *d_num_u_candidate_vs_,
 		vtype *d_v_candidate_us_, numtype *d_num_v_candidate_us_);
 
-__global__ void encodeKernel(
+__global__ void
+encodeKernel(
 		// graph info
 		offtype *d_offsets_, vtype *d_nbrs_,
 		// candidate vertices

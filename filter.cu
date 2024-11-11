@@ -9,6 +9,7 @@
 
 #include <set>
 #include <stack>
+#include <algorithm>
 
 #include "order.h"
 #include "memManag.cuh"
@@ -410,12 +411,12 @@ oneRoundFilterBidirectionKernel(
 
     numtype *d_query_nlc_table_)
 {
-  uint tid = threadIdx.x;
-  uint bid = blockIdx.x;
-  uint idx = tid + bid * blockDim.x;
-  uint wid = tid / warpSize;
-  uint lid = tid % warpSize;
-  uint wid_g = idx / warpSize;
+  uint32_t tid = threadIdx.x;
+  uint32_t bid = blockIdx.x;
+  uint32_t idx = tid + bid * blockDim.x;
+  uint32_t wid = tid / warpSize;
+  uint32_t lid = tid % warpSize;
+  uint32_t wid_g = idx / warpSize;
 
   __shared__ vltype s_q_vlabels[MAX_VQ];
   __shared__ degtype s_q_degs[MAX_VQ];
@@ -436,90 +437,105 @@ oneRoundFilterBidirectionKernel(
   warp_pos[lid][wid] = 0;
   s_bitmap[lid][wid] = 0;
   s_bitmap_reverse[tid] = 0;
-  if (idx < C_NUM_VD)
-    s_d_vlabels_part[wid][lid] = d_v_labels_[idx];
   __syncthreads();
 
-  vtype v = wid_g * warpSize;
-  vtype v_end = min(v + warpSize, C_NUM_VD); // exclusive
-  while (v < v_end)
+  int block_iter_cnt = 0;
+  int grid_size = gridDim.x * blockDim.x;
+  while (block_iter_cnt * grid_size < C_NUM_VD)
   {
-    if (lid < C_NUM_VLQ)
-      s_d_nlc_table[wid][lid] = 0;
-    __syncwarp();
+    idx = tid + bid * blockDim.x + block_iter_cnt * grid_size;
+    wid_g = idx / warpSize;
 
-    if (s_d_vlabels_part[wid][v % warpSize] >= C_NUM_VLQ)
+    s_bitmap[lid][wid] = 0;
+    s_bitmap_reverse[tid] = 0;
+    if (idx < C_NUM_VD)
+      s_d_vlabels_part[wid][lid] = d_v_labels_[idx];
+    __syncthreads();
+
+    vtype v = wid_g * warpSize;
+    vtype v_end = min(v + warpSize, C_NUM_VD); // exclusive
+    while (v < v_end)
     {
+      if (lid < C_NUM_VLQ)
+        s_d_nlc_table[wid][lid] = 0;
+      __syncwarp();
+
+      if (s_d_vlabels_part[wid][v % warpSize] >= C_NUM_VLQ)
+      {
+        ++v;
+        continue;
+      }
+
+      // build data nlc table
+      offtype v_nbr_off = d_offsets_[v] + lid;
+      offtype v_nbr_off_end = d_offsets_[v + 1];
+      while (v_nbr_off < v_nbr_off_end)
+      {
+        auto group = cooperative_groups::coalesced_threads();
+        vtype v_nbr = d_nbrs_[v_nbr_off];
+        vltype v_nbr_label = d_v_labels_[v_nbr];
+        if (v_nbr_label < C_NUM_VLQ)
+          atomicAdd_block(&s_d_nlc_table[wid][v_nbr_label], 1); // `wid` is `v`
+        group.sync();
+        v_nbr_off += warpSize;
+      }
+      __syncwarp();
+
+      degtype v_deg = d_v_degrees_[v];
+      vltype v_label = s_d_vlabels_part[wid][v % warpSize];
+      for (vtype u = 0; u < C_NUM_VQ; ++u)
+      {
+        // all lanes take the same branch
+        if (s_q_degs[u] <= v_deg &&
+            s_q_vlabels[u] == v_label)
+        {
+          // lid == vLabel
+          if (lid < C_NUM_VLQ)
+          {
+            auto group = cooperative_groups::coalesced_threads();
+            int mask = group.all(s_d_nlc_table[wid][lid] >= s_q_nlc_table[u][lid]);
+            //  d_query_nlc_table_[u * C_NUM_VLQ + lid];
+            if (mask && group.thread_rank() == 0)
+            {
+              atomicOr_block(&s_bitmap[u][wid], (1u << (v % 32)));
+              atomicOr_block(&s_bitmap_reverse[v % BLOCK_DIM], (1u << (u % 32)));
+            }
+            group.sync();
+          }
+        }
+        __syncwarp();
+      }
       ++v;
-      continue;
-    }
-
-    // build data nlc table
-    offtype v_nbr_off = d_offsets_[v] + lid;
-    offtype v_nbr_off_end = d_offsets_[v + 1];
-    while (v_nbr_off < v_nbr_off_end)
-    {
-      auto group = cooperative_groups::coalesced_threads();
-      vtype v_nbr = d_nbrs_[v_nbr_off];
-      vltype v_nbr_label = d_v_labels_[v_nbr];
-      if (v_nbr_label < C_NUM_VLQ)
-        atomicAdd(&s_d_nlc_table[wid][v_nbr_label], 1); // `wid` is `v`
-      group.sync();
-      v_nbr_off += warpSize;
     }
     __syncwarp();
 
+    // read from shared, write to global memory.
     for (vtype u = 0; u < C_NUM_VQ; ++u)
     {
-      // all lanes take the same branch
-      if (s_q_degs[u] <= d_v_degrees_[v] &&
-          s_q_vlabels[u] == s_d_vlabels_part[wid][v % warpSize])
+      // lid: v%warpSize
+      if (s_bitmap[u][wid] & (1u << lid)) // if v is a candidate vertex for u
       {
-        // lid == vLabel
-        if (lid < C_NUM_VLQ)
-        {
-          auto group = cooperative_groups::coalesced_threads();
-          int mask = group.all(s_d_nlc_table[wid][lid] >=
-                               s_q_nlc_table[u][lid]);
-          //  d_query_nlc_table_[u * C_NUM_VLQ + lid];
-          if (mask && group.thread_rank() == 0)
-          {
-            atomicOr_block(&s_bitmap[u][wid], (1u << (v % 32)));
-            atomicOr_block(&s_bitmap_reverse[v % BLOCK_DIM], (1u << (u % 32)));
-          }
-          group.sync();
-        }
+        auto group = cooperative_groups::coalesced_threads();
+        int rank = group.thread_rank();
+        if (rank == 0)
+          warp_pos[u][wid] = atomicAdd_system(&d_num_u_candidate_vs_[u], group.size());
+        group.sync();
+        int my_pos = warp_pos[u][wid] + rank;
+        d_u_candidate_vs_[u * C_MAX_L_FREQ + my_pos] = wid_g * warpSize + lid;
       }
       __syncwarp();
     }
-    ++v;
-  }
-  __syncwarp();
+    __syncthreads();
+    if (idx < C_NUM_VD)
+      d_num_v_candidate_us_[idx] = __popc(s_bitmap_reverse[tid]);
+    __syncthreads();
 
-  // read from shared, write to global memory.
-  for (vtype u = 0; u < C_NUM_VQ; ++u)
-  {
-    // lid: v%warpSize
-    if (s_bitmap[u][wid] & (1u << lid)) // if v is a candidate vertex for u
-    {
-      auto group = cooperative_groups::coalesced_threads();
-      int rank = group.thread_rank();
-      if (rank == 0)
-        warp_pos[u][wid] = atomicAdd_system(&d_num_u_candidate_vs_[u], group.size());
-      group.sync();
-      int my_pos = warp_pos[u][wid] + rank;
-      d_u_candidate_vs_[u * C_MAX_L_FREQ + my_pos] = wid_g * warpSize + lid;
-    }
-    __syncwarp();
-  }
-  __syncthreads();
-  if (idx < C_NUM_VD)
-    d_num_v_candidate_us_[idx] = __popc(s_bitmap_reverse[tid]);
-  __syncthreads();
+    if (idx < C_NUM_VD)
+      d_v_candidate_us_[idx] = s_bitmap_reverse[tid];
+    __syncthreads();
 
-  if (idx < C_NUM_VD)
-    d_v_candidate_us_[idx] = s_bitmap_reverse[tid];
-  __syncthreads();
+    block_iter_cnt++;
+  }
 }
 
 void oneRoundFilterBidirection(
@@ -549,9 +565,11 @@ void oneRoundFilterBidirection(
 
   cuchk(cudaMemcpy(d_query_nlc, h_query_nlc, sizeof(numtype) * NUM_VQ * NUM_VLQ, cudaMemcpyHostToDevice));
 
-  dim3 block, grid;
+  dim3 orfb_block = 512;
+  dim3 orfb_grid = std::min(GRID_DIM, calc_grid_dim(NUM_VD, orfb_block.x));
 
-  oneRoundFilterBidirectionKernel<<<GRID_DIM, BLOCK_DIM>>>(
+  // max threads: NUM_VD
+  oneRoundFilterBidirectionKernel<<<orfb_grid, orfb_block>>>(
       dq->vLabels_, dq->degree_,
       dg->offsets_, dg->neighbors_, dg->vLabels_, dg->degree_,
       d_u_candidate_vs_, d_num_u_candidate_vs_,
@@ -578,49 +596,60 @@ encodeKernel(
     numtype *enc_num_query_us_, numtype enc_num_blocks,
     vtype *enc_query_us_compact_, offtype *enc_cluster_offsets_)
 {
-  uint tid = threadIdx.x;
-  uint bid = blockIdx.x;
-  uint idx = tid + bid * blockDim.x;
-  uint wid = tid / warpSize;
-  uint lid = tid % warpSize;
-  uint wid_g = idx / warpSize;
+  uint32_t tid = threadIdx.x;
+  uint32_t bid = blockIdx.x;
+  uint32_t idx = tid + bid * blockDim.x;
+  uint32_t wid = tid / warpSize;
+  uint32_t lid = tid % warpSize;
+  uint32_t wid_g = idx / warpSize;
 
   __shared__ vtype s_core_v[WARP_PER_BLOCK];
 
-  if (wid_g < d_num_u_candidate_vs_[core_u]) // one warp one cluster.
-  {
-    if (lid == 0)
-      s_core_v[wid] = d_u_candidate_vs_[core_u * C_MAX_L_FREQ + wid_g];
-  }
-  else
-    return;
-  __syncwarp();
-
-  // encode core vertex
-  vtype core_v = s_core_v[wid];
   uint32_t enc_pos = enc_cluster_offsets_[cluster_index];
 
-  if (lid == 0)
-    encodings_[core_v * enc_num_blocks + enc_pos / ENC_SIZE] |= 1u << (enc_pos % ENC_SIZE);
-  __syncwarp();
+  int block_iter_cnt = 0;
+  int grid_size = gridDim.x * blockDim.x;
 
-  // encode core_v's neighbors
-  offtype nbr_off = d_offsets_[core_v] + lid;
-  while (nbr_off < d_offsets_[core_v + 1])
+  while (block_iter_cnt * grid_size / warpSize < d_num_u_candidate_vs_[core_u]) // wid_g < num_can
   {
-    // auto group = cooperative_groups::coalesced_threads();
-    vtype v_nbr = d_nbrs_[nbr_off];
-    for (int i = 1; i < enc_num_query_us_[cluster_index]; ++i)
+    idx = tid + bid * blockDim.x + block_iter_cnt * grid_size;
+    wid_g = idx / warpSize;
+
+    if (wid_g < d_num_u_candidate_vs_[core_u]) // one warp one cluster.
     {
-      vtype tobe_map_u = enc_query_us_compact_[enc_pos + i];
-      // TODO: optimize using bitmap. fast check.
-      if (d_v_candidate_us_[v_nbr] & (1u << tobe_map_u))
-        atomicOr(&encodings_[v_nbr * enc_num_blocks + (enc_pos + i) / ENC_SIZE], 1u << ((enc_pos + i) % ENC_SIZE));
-      // group.sync();
+      if (lid == 0)
+        s_core_v[wid] = d_u_candidate_vs_[core_u * C_MAX_L_FREQ + wid_g];
     }
-    nbr_off += warpSize;
+    __syncwarp();
+
+    // encode core vertex
+    vtype core_v = s_core_v[wid];
+
+    if (lid == 0)
+      encodings_[core_v * enc_num_blocks + enc_pos / ENC_SIZE] |= 1u << (enc_pos % ENC_SIZE);
+    __syncwarp();
+
+    // encode core_v's neighbors
+    offtype nbr_off = d_offsets_[core_v] + lid;
+    while (nbr_off < d_offsets_[core_v + 1])
+    {
+      // auto group = cooperative_groups::coalesced_threads();
+      vtype v_nbr = d_nbrs_[nbr_off];
+      for (int i = 1; i < enc_num_query_us_[cluster_index]; ++i)
+      {
+        vtype tobe_map_u = enc_query_us_compact_[enc_pos + i];
+        // TODO: optimize using bitmap. fast check.
+        if (d_v_candidate_us_[v_nbr] & (1u << tobe_map_u))
+          atomicOr(&encodings_[v_nbr * enc_num_blocks + (enc_pos + i) / ENC_SIZE], 1u << ((enc_pos + i) % ENC_SIZE));
+        // group.sync();
+      }
+      nbr_off += warpSize;
+    }
+
+    __syncthreads();
+
+    block_iter_cnt++;
   }
-  __syncwarp();
 }
 
 __global__ void
@@ -648,64 +677,72 @@ mergeKernel(
     numtype *enc_merged_cluster_left_, numtype *enc_merged_cluster_right_,
     vtype *enc_merged_cluster_vertex_, numtype *enc_merged_cluster_layer_)
 {
-  uint tid = threadIdx.x;
-  uint bid = blockIdx.x;
-  uint idx = tid + bid * blockDim.x;
-  uint wid = tid / warpSize;
-  uint lid = tid % warpSize;
-  uint wid_g = idx / warpSize;
+  uint32_t tid = threadIdx.x;
+  uint32_t bid = blockIdx.x;
+  uint32_t idx = tid + bid * blockDim.x;
+  uint32_t wid = tid / warpSize;
+  uint32_t lid = tid % warpSize;
+  uint32_t wid_g = idx / warpSize;
 
   __shared__ vtype s_core_v[WARP_PER_BLOCK]; // one warp one cluster.
 
-  if (wid_g < d_num_u_candidate_vs_[core_u])
+  int block_iter_cnt = 0;
+  int grid_size = gridDim.x * blockDim.x;
+
+  while (block_iter_cnt * grid_size / warpSize < d_num_u_candidate_vs_[core_u])
   {
+    idx = tid + bid * blockDim.x + block_iter_cnt * grid_size;
+    wid_g = idx / warpSize;
+
     if (lid == 0)
-      s_core_v[wid] = d_u_candidate_vs_[core_u * C_MAX_L_FREQ + wid_g];
-  }
-  else
-    return;
-  __syncwarp();
+      if (wid_g < d_num_u_candidate_vs_[core_u])
+        s_core_v[wid] = d_u_candidate_vs_[core_u * C_MAX_L_FREQ + wid_g];
+      else
+        s_core_v[wid] = UINT32_MAX;
+    __syncwarp();
 
-  // encode core vertex
-  vtype core_v = s_core_v[wid];
-  uint32_t enc_pos = enc_cluster_offsets_[cluster_index];
+    // encode core vertex
+    vtype core_v = s_core_v[wid];
+    uint32_t enc_pos = enc_cluster_offsets_[cluster_index];
 
-  if (lid == 0 && core_v != UINT32_MAX)
-  {
-    if (encodings_[core_v * enc_num_blocks + left_pos / ENC_SIZE] & (1u << (left_pos % ENC_SIZE)) &&
-        encodings_[core_v * enc_num_blocks + right_pos / ENC_SIZE] & (1u << (right_pos % ENC_SIZE)))
+    if (lid == 0 && core_v != UINT32_MAX)
     {
-      encodings_[core_v * enc_num_blocks + enc_pos / ENC_SIZE] |= 1u << (enc_pos % ENC_SIZE);
-    }
-    else
-    {
-      s_core_v[wid] = UINT32_MAX;
-      d_u_candidate_vs_[core_u * C_MAX_L_FREQ + wid_g] = UINT32_MAX;
-    }
-  }
-  __syncwarp();
-
-  // neighbor encode should refer to core-vertex positions of old clusters.
-  core_v = s_core_v[wid];
-  if (core_v != UINT32_MAX)
-  {
-    offtype nbr_off = d_offsets_[core_v] + lid;
-    while (nbr_off < d_offsets_[core_v + 1])
-    {
-      auto group = cooperative_groups::coalesced_threads();
-      vtype v_nbr = d_nbrs_[nbr_off];
-      for (int i = 1; i < enc_num_query_us_[cluster_index]; ++i)
+      if (encodings_[core_v * enc_num_blocks + left_pos / ENC_SIZE] & (1u << (left_pos % ENC_SIZE)) &&
+          encodings_[core_v * enc_num_blocks + right_pos / ENC_SIZE] & (1u << (right_pos % ENC_SIZE)))
       {
-        vtype tobe_map_u = enc_query_us_compact_[enc_pos + i];
-        if (d_v_candidate_us_[v_nbr] & (1u << tobe_map_u))
-          atomicOr(&encodings_[v_nbr * enc_num_blocks + (enc_pos + i) / ENC_SIZE], 1u << ((enc_pos + i) % ENC_SIZE));
-        // TODO: optimize using bitmap. fast check.
-        group.sync();
+        encodings_[core_v * enc_num_blocks + enc_pos / ENC_SIZE] |= 1u << (enc_pos % ENC_SIZE);
       }
-      nbr_off += warpSize;
+      else
+      {
+        s_core_v[wid] = UINT32_MAX;
+        d_u_candidate_vs_[core_u * C_MAX_L_FREQ + wid_g] = UINT32_MAX;
+      }
     }
+    __syncwarp();
+
+    // neighbor encode should refer to core-vertex positions of old clusters.
+    if (core_v != UINT32_MAX)
+    {
+      offtype nbr_off = d_offsets_[core_v] + lid;
+      while (nbr_off < d_offsets_[core_v + 1])
+      {
+        auto group = cooperative_groups::coalesced_threads();
+        vtype v_nbr = d_nbrs_[nbr_off];
+        for (int i = 1; i < enc_num_query_us_[cluster_index]; ++i)
+        {
+          vtype tobe_map_u = enc_query_us_compact_[enc_pos + i];
+          if (d_v_candidate_us_[v_nbr] & (1u << tobe_map_u))
+            atomicOr(&encodings_[v_nbr * enc_num_blocks + (enc_pos + i) / ENC_SIZE], 1u << ((enc_pos + i) % ENC_SIZE));
+          group.sync();
+        }
+        nbr_off += warpSize;
+      }
+    }
+    // __syncwarp();
+    __syncthreads();
+
+    block_iter_cnt++;
   }
-  __syncwarp();
 }
 
 __global__ void
@@ -719,12 +756,12 @@ combineMultipleClustersKernel(
     vtype *query_us_compact_, offtype *cluster_offsets_,
     vtype *d_u_candidate_vs_, numtype *d_num_u_candidate_vs_)
 {
-  uint tid = threadIdx.x;
-  uint bid = blockIdx.x;
-  uint idx = tid + bid * blockDim.x;
-  uint wid = tid / warpSize;
-  uint lid = tid % warpSize;
-  uint wid_g = idx / warpSize;
+  uint32_t tid = threadIdx.x;
+  uint32_t bid = blockIdx.x;
+  uint32_t idx = tid + bid * blockDim.x;
+  uint32_t wid = tid / warpSize;
+  uint32_t lid = tid % warpSize;
+  uint32_t wid_g = idx / warpSize;
 
   __shared__ bool s_combine_type; // 0: new cluster, 1: old cluster.
   __shared__ int s_big_pos;
@@ -743,85 +780,95 @@ combineMultipleClustersKernel(
   }
   __syncthreads();
 
-  // TODO: only pick core_u's candidates.
-  if (wid_g < d_num_u_candidate_vs_[core_u])
+  int block_iter_cnt = 0;
+  int grid_size = gridDim.x * blockDim.x;
+
+  while (block_iter_cnt * (grid_size / warpSize) < d_num_u_candidate_vs_[core_u])
   {
+    idx = tid + bid * blockDim.x + block_iter_cnt * grid_size;
+    wid_g = idx / warpSize;
+
     if (lid == 0)
-      s_warp_v[wid] = d_u_candidate_vs_[core_u * C_MAX_L_FREQ + wid_g];
-  }
-  else
-    return;
-  __syncwarp();
-
-  if (s_warp_v[wid] == UINT32_MAX)
-    return;
-
-  // combine core_v
-  if (lid < num_small_clusters) // one lid, one small cluster.core_u position.
-  {
-    auto group = cooperative_groups::coalesced_threads();
-    int small_pos = s_small_pos[lid];
-    int big_pos = s_big_pos;
-    uint32_t enc = d_encodings_[s_warp_v[wid] * num_blocks + small_pos / ENC_SIZE] & (1u << (small_pos % ENC_SIZE));
-
-    uint32_t mask = group.all(enc);
-    if (group.thread_rank() == 0)
     {
-      if (mask)
-      {
-        if (s_combine_type == 1) // old cluster.
-          d_encodings_[s_warp_v[wid] * num_blocks + big_pos / ENC_SIZE] &= FULL_MASK;
-        else // new cluster
-          d_encodings_[s_warp_v[wid] * num_blocks + big_pos / ENC_SIZE] |= (1u << (big_pos % ENC_SIZE));
-      }
-      else
-      {
-        d_encodings_[s_warp_v[wid] * num_blocks + big_pos / ENC_SIZE] &= (~(1u << (big_pos % ENC_SIZE)));
-      }
+      s_warp_v[wid] = UINT32_MAX;
+      if (wid_g < d_num_u_candidate_vs_[core_u])
+        s_warp_v[wid] = d_u_candidate_vs_[core_u * C_MAX_L_FREQ + wid_g];
     }
-  }
-  __syncwarp();
+    __syncwarp();
 
-  // combine core_v_nbrs
-  // one lane: one v_nbr, intersect by for loop.
-
-  offtype v_nbr_off = d_offsets_[s_warp_v[wid]] + lid;
-  offtype v_nbr_off_end = d_offsets_[s_warp_v[wid] + 1];
-  while (v_nbr_off < v_nbr_off_end)
-  {
-    auto group = cooperative_groups::coalesced_threads();
-    vtype v = d_nbrs_[v_nbr_off];
-    for (int i = 1; i < num_query_us_[big_cluster]; ++i)
+    if (s_warp_v[wid] != UINT32_MAX)
     {
-      int target_pos = s_big_pos + i;
-      vtype target_u = query_us_compact_[target_pos];
-      int final_value = 1;
-      for (int small_cluster_index = 0; small_cluster_index < num_small_clusters; ++small_cluster_index)
+      // combine core_v
+      if (lid < num_small_clusters) // one lid, one small cluster.core_u position.
       {
-        int small_pos = s_small_pos[small_cluster_index];
-        while (small_pos < s_small_pos[small_cluster_index] + num_query_us_[small_clusters_arr_[small_cluster_index]])
+        auto group = cooperative_groups::coalesced_threads();
+        int small_pos = s_small_pos[lid];
+        int big_pos = s_big_pos;
+        uint32_t enc = d_encodings_[s_warp_v[wid] * num_blocks + small_pos / ENC_SIZE] & (1u << (small_pos % ENC_SIZE));
+
+        uint32_t mask = group.all(enc);
+        if (group.thread_rank() == 0)
         {
-          if (target_u == query_us_compact_[small_pos])
+          if (mask)
           {
-            final_value = final_value &&
-                          d_encodings_[v * num_blocks + small_pos / ENC_SIZE] & (1u << (small_pos % ENC_SIZE));
-            break;
+            if (s_combine_type == 1) // old cluster.
+              d_encodings_[s_warp_v[wid] * num_blocks + big_pos / ENC_SIZE] &= FULL_MASK;
+            else // new cluster
+              d_encodings_[s_warp_v[wid] * num_blocks + big_pos / ENC_SIZE] |= (1u << (big_pos % ENC_SIZE));
           }
-          small_pos++;
+          else
+          {
+            d_encodings_[s_warp_v[wid] * num_blocks + big_pos / ENC_SIZE] &= (~(1u << (big_pos % ENC_SIZE)));
+          }
         }
-        if (!final_value)
-          break;
       }
-      group.sync();
-      final_value = !final_value;
-      // no warp divergence here, all the threads take the same path.
-      if (s_combine_type == 1)
-        atomicAnd(&d_encodings_[v * num_small_clusters + target_pos / ENC_SIZE], ~(final_value << (target_pos % ENC_SIZE)));
-      else
-        atomicAnd(&d_encodings_[v * num_blocks + target_pos / ENC_SIZE], final_value << (target_pos % ENC_SIZE));
-    }
+      __syncwarp();
 
-    v_nbr_off += warpSize;
+      // combine core_v_nbrs
+      // one lane: one v_nbr, intersect by for loop.
+
+      offtype v_nbr_off = d_offsets_[s_warp_v[wid]] + lid;
+      offtype v_nbr_off_end = d_offsets_[s_warp_v[wid] + 1];
+      while (v_nbr_off < v_nbr_off_end)
+      {
+        auto group = cooperative_groups::coalesced_threads();
+        vtype v = d_nbrs_[v_nbr_off];
+        for (int i = 1; i < num_query_us_[big_cluster]; ++i)
+        {
+          int target_pos = s_big_pos + i;
+          vtype target_u = query_us_compact_[target_pos];
+          int final_value = 1;
+          for (int small_cluster_index = 0; small_cluster_index < num_small_clusters; ++small_cluster_index)
+          {
+            int small_pos = s_small_pos[small_cluster_index];
+            while (small_pos < s_small_pos[small_cluster_index] + num_query_us_[small_clusters_arr_[small_cluster_index]])
+            {
+              if (target_u == query_us_compact_[small_pos])
+              {
+                final_value = final_value &&
+                              d_encodings_[v * num_blocks + small_pos / ENC_SIZE] & (1u << (small_pos % ENC_SIZE));
+                break;
+              }
+              small_pos++;
+            }
+            if (!final_value)
+              break;
+          }
+          group.sync();
+          final_value = !final_value;
+          // no warp divergence here, all the threads take the same path.
+          if (s_combine_type == 1)
+            atomicAnd(&d_encodings_[v * num_small_clusters + target_pos / ENC_SIZE], ~(final_value << (target_pos % ENC_SIZE)));
+          else
+            atomicOr(&d_encodings_[v * num_blocks + target_pos / ENC_SIZE], final_value << (target_pos % ENC_SIZE));
+        }
+
+        v_nbr_off += warpSize;
+      }
+    }
+    __syncthreads();
+
+    block_iter_cnt++;
   }
 }
 
@@ -830,12 +877,12 @@ compactCandidatesKernel(
     vtype *d_u_candidate_vs_, numtype *d_num_u_candidate_vs_,
     vtype *d_u_candidate_vs_new_, numtype *d_num_u_candidate_vs_new_)
 {
-  uint tid = threadIdx.x;
-  uint bid = blockIdx.x;
-  uint idx = tid + bid * blockDim.x;
-  uint wid = tid / warpSize;
-  uint lid = tid % warpSize;
-  uint wid_g = idx / warpSize;
+  uint32_t tid = threadIdx.x;
+  uint32_t bid = blockIdx.x;
+  uint32_t idx = tid + bid * blockDim.x;
+  uint32_t wid = tid / warpSize;
+  uint32_t lid = tid % warpSize;
+  uint32_t wid_g = idx / warpSize;
 
   __shared__ int warp_pos[WARP_PER_BLOCK];
 
@@ -863,6 +910,7 @@ void encode(
     gpuGraph *dg,
     cpuCluster *cpu_clusters_, gpuCluster *gpu_clusters_,
     uint32_t *h_encodings_, uint32_t *d_encodings_, encodingMeta *enc_meta,
+    numtype *h_num_u_candidate_vs_,
     vtype *d_u_candidate_vs_, numtype *d_num_u_candidate_vs_,
     vtype *d_v_candidate_us_, numtype *d_num_v_candidate_us_)
 {
@@ -930,7 +978,12 @@ void encode(
   {
     vtype core_u = cpu_clusters_[cluster_index].query_us_[0];
 
-    encodeKernel<<<GRID_DIM, BLOCK_DIM>>>(
+    dim3 enc_block = 512;
+    int N = h_num_u_candidate_vs_[core_u];
+    dim3 enc_grid = std::min(GRID_DIM, calc_grid_dim(N, enc_block.x));
+
+    // TODO: change d_num_u_candidate_vs_ into num_u_candidate_vs_[core_u]
+    encodeKernel<<<enc_grid, enc_block>>>(
         dg->offsets_, dg->neighbors_,
         core_u, cluster_index,
         d_u_candidate_vs_, d_num_u_candidate_vs_,
@@ -1016,7 +1069,11 @@ void encode(
 
           vtype core_u = cpu_clusters_[big_cluster].query_us_[0];
 
-          combineMultipleClustersKernel<<<GRID_DIM, BLOCK_DIM>>>(
+          dim3 comb_block = 512;
+          int N = h_num_u_candidate_vs_[core_u];
+          dim3 comb_grid = std::min(GRID_DIM, calc_grid_dim(N, comb_block.x));
+
+          combineMultipleClustersKernel<<<comb_grid, comb_block>>>(
               dg->offsets_, dg->neighbors_,
               core_u, enc_meta->combine_type_[combine_ptr],
               big_cluster, d_small_clusters_, num_small_clusters,
@@ -1058,7 +1115,11 @@ void encode(
     vtype vertex = enc_meta->merged_cluster_vertex_[merge_ptr];
     int layer = enc_meta->merged_cluster_layer_[merge_ptr];
 
-    mergeKernel<<<GRID_DIM, BLOCK_DIM>>>(
+    dim3 mg_block = 512;
+    int N = h_num_u_candidate_vs_[core_u] * 32;
+    dim3 mg_grid = std::min(GRID_DIM, calc_grid_dim(N, mg_block.x));
+
+    mergeKernel<<<mg_grid, mg_block>>>(
         left_position, right_position,
         dg->offsets_, dg->neighbors_,
         core_u, layer, cluster_index,
@@ -1102,12 +1163,12 @@ collectCandidatesKernel(
 
     int num_blocks)
 {
-  uint tid = threadIdx.x;
-  uint bid = blockIdx.x;
-  uint idx = tid + bid * blockDim.x;
-  uint wid = tid / warpSize;
-  uint lid = tid % warpSize;
-  uint wid_g = idx / warpSize;
+  uint32_t tid = threadIdx.x;
+  uint32_t bid = blockIdx.x;
+  uint32_t idx = tid + bid * blockDim.x;
+  uint32_t wid = tid / warpSize;
+  uint32_t lid = tid % warpSize;
+  uint32_t wid_g = idx / warpSize;
 
   __shared__ int pos_array[MAX_VQ];
   __shared__ vtype target_us[MAX_VQ];
@@ -1119,40 +1180,54 @@ collectCandidatesKernel(
     pos_array[tid] = d_pos_array_[tid];
     target_us[tid] = d_query_us_compact_[pos_array[tid]];
   }
-  s_d_v_can[tid] = 0;
   __syncthreads();
 
   vtype v = UINT32_MAX;
-  if (wid_g * warpSize < C_NUM_VD)
-    v = idx;
-  else
-    return;
 
-  for (int i = 0; i < C_NUM_VQ; ++i)
+  int block_iter_cnt = 0;
+  int grid_size = gridDim.x * blockDim.x;
+
+  while (block_iter_cnt * grid_size < C_NUM_VD)
   {
-    int pos = pos_array[i];
-    vtype u = target_us[i];
+    idx = tid + bid * blockDim.x + block_iter_cnt * grid_size;
+    wid_g = idx / warpSize;
 
+    s_d_v_can[tid] = 0;
+
+    if (idx < C_NUM_VD)
+      v = idx;
+    else
+      v = UINT32_MAX;
+
+    for (int i = 0; i < C_NUM_VQ; ++i)
+    {
+      int pos = pos_array[i];
+      vtype u = target_us[i];
+
+      if (v < C_NUM_VD)
+        if (d_encodings_[v * num_blocks + pos / ENC_SIZE] & (1u << (pos % ENC_SIZE)))
+        {
+          // d_v_candidate_us_
+          s_d_v_can[tid] |= (1u << u);
+          // d_u_candidate_vs_
+          auto group = cooperative_groups::coalesced_threads();
+          int rank = group.thread_rank();
+          if (rank == 0)
+            warp_pos[wid] = atomicAdd(&d_num_u_candidate_vs_[u], group.size());
+          group.sync();
+          int my_pos = warp_pos[wid] + rank;
+          d_u_candidate_vs_[u * C_MAX_L_FREQ + my_pos] = v;
+        }
+      __syncwarp();
+    }
     if (v < C_NUM_VD)
-      if (d_encodings_[v * num_blocks + pos / ENC_SIZE] & (1u << (pos % ENC_SIZE)))
-      {
-        // d_v_candidate_us_
-        s_d_v_can[tid] |= (1u << u);
-        // d_u_candidate_vs_
-        auto group = cooperative_groups::coalesced_threads();
-        int rank = group.thread_rank();
-        if (rank == 0)
-          warp_pos[wid] = atomicAdd(&d_num_u_candidate_vs_[u], group.size());
-        group.sync();
-        int my_pos = warp_pos[wid] + rank;
-        d_u_candidate_vs_[u * C_MAX_L_FREQ + my_pos] = v;
-      }
-    __syncwarp();
-  }
-  if (v < C_NUM_VD)
-  {
-    d_v_candidate_us_[v] = s_d_v_can[tid];
-    d_num_v_candidate_us_[v] = __popc(s_d_v_can[tid]);
+    {
+      d_v_candidate_us_[v] = s_d_v_can[tid];
+      d_num_v_candidate_us_[v] = __popc(s_d_v_can[tid]);
+    }
+    __syncthreads();
+
+    block_iter_cnt++;
   }
 }
 
@@ -1204,6 +1279,7 @@ void clusterFilter(
       dg,
       cpu_clusters_, gpu_clusters_,
       h_encodings_, d_encodings_, enc_meta,
+      h_num_u_candidate_vs_,
       d_u_candidate_vs_, d_num_u_candidate_vs_,
       d_v_candidate_us_, d_num_v_candidate_us_);
 
@@ -1238,7 +1314,11 @@ void clusterFilter(
   cuchk(cudaMalloc((void **)&enc_d_query_us_compact_, sizeof(vtype) * enc_meta->num_total_us));
   cuchk(cudaMemcpy(enc_d_query_us_compact_, enc_meta->query_us_compact_, sizeof(vtype) * enc_meta->num_total_us, cudaMemcpyHostToDevice));
 
-  collectCandidatesKernel<<<GRID_DIM, BLOCK_DIM>>>(
+  dim3 cc_block = 512;
+  int N = NUM_VD;
+  dim3 cc_grid = std::min(GRID_DIM, calc_grid_dim(N, cc_block.x));
+
+  collectCandidatesKernel<<<cc_grid, cc_block>>>(
       d_u_candidate_vs_, d_num_u_candidate_vs_,
       d_v_candidate_us_, d_num_v_candidate_us_,
       d_encodings_, d_pos_array_,
