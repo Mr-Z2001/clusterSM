@@ -405,20 +405,17 @@ oneRoundFilterBidirectionKernel(
     vltype *query_vLabels_, degtype *query_out_degrees_,
     offtype *d_offsets_, vtype *d_nbrs_, vltype *d_v_labels_, degtype *d_v_degrees_,
 
-    uint32_t *d_bitmap_, size_t bitmap_pitch,
-    uint32_t *d_bitmap_reverse_,
-
     vtype *d_u_candidate_vs_, numtype *d_num_u_candidate_vs_,
     vtype *d_v_candidate_us_, numtype *d_num_v_candidate_us_,
 
     numtype *d_query_nlc_table_)
 {
-  int tid = threadIdx.x;
-  int bid = blockIdx.x;
-  int idx = tid + bid * blockDim.x;
-  int wid = tid / warpSize;
-  int lid = tid % warpSize;
-  int wid_g = idx / warpSize;
+  uint tid = threadIdx.x;
+  uint bid = blockIdx.x;
+  uint idx = tid + bid * blockDim.x;
+  uint wid = tid / warpSize;
+  uint lid = tid % warpSize;
+  uint wid_g = idx / warpSize;
 
   __shared__ vltype s_q_vlabels[MAX_VQ];
   __shared__ degtype s_q_degs[MAX_VQ];
@@ -483,7 +480,8 @@ oneRoundFilterBidirectionKernel(
         {
           auto group = cooperative_groups::coalesced_threads();
           int mask = group.all(s_d_nlc_table[wid][lid] >=
-                               d_query_nlc_table_[u * C_NUM_VLQ + lid]);
+                               s_q_nlc_table[u][lid]);
+          //  d_query_nlc_table_[u * C_NUM_VLQ + lid];
           if (mask && group.thread_rank() == 0)
           {
             atomicOr_block(&s_bitmap[u][wid], (1u << (v % 32)));
@@ -527,8 +525,6 @@ oneRoundFilterBidirectionKernel(
 void oneRoundFilterBidirection(
     cpuGraph *hq, cpuGraph *hg,
     gpuGraph *dq, gpuGraph *dg,
-    uint32_t *d_bitmap_, size_t bitmap_pitch,
-    uint32_t *d_bitmap_reverse_,
 
     vtype *d_u_candidate_vs_, numtype *d_num_u_candidate_vs_,
     vtype *d_v_candidate_us_, numtype *d_num_v_candidate_us_)
@@ -553,11 +549,11 @@ void oneRoundFilterBidirection(
 
   cuchk(cudaMemcpy(d_query_nlc, h_query_nlc, sizeof(numtype) * NUM_VQ * NUM_VLQ, cudaMemcpyHostToDevice));
 
+  dim3 block, grid;
+
   oneRoundFilterBidirectionKernel<<<GRID_DIM, BLOCK_DIM>>>(
       dq->vLabels_, dq->degree_,
       dg->offsets_, dg->neighbors_, dg->vLabels_, dg->degree_,
-      d_bitmap_, bitmap_pitch,
-      d_bitmap_reverse_,
       d_u_candidate_vs_, d_num_u_candidate_vs_,
       d_v_candidate_us_, d_num_v_candidate_us_,
       d_query_nlc);
@@ -582,12 +578,12 @@ encodeKernel(
     numtype *enc_num_query_us_, numtype enc_num_blocks,
     vtype *enc_query_us_compact_, offtype *enc_cluster_offsets_)
 {
-  int tid = threadIdx.x;
-  int bid = blockIdx.x;
-  int idx = tid + bid * blockDim.x;
-  int wid = tid / warpSize;
-  int lid = tid % warpSize;
-  int wid_g = idx / warpSize;
+  uint tid = threadIdx.x;
+  uint bid = blockIdx.x;
+  uint idx = tid + bid * blockDim.x;
+  uint wid = tid / warpSize;
+  uint lid = tid % warpSize;
+  uint wid_g = idx / warpSize;
 
   __shared__ vtype s_core_v[WARP_PER_BLOCK];
 
@@ -652,12 +648,12 @@ mergeKernel(
     numtype *enc_merged_cluster_left_, numtype *enc_merged_cluster_right_,
     vtype *enc_merged_cluster_vertex_, numtype *enc_merged_cluster_layer_)
 {
-  int tid = threadIdx.x;
-  int bid = blockIdx.x;
-  int idx = tid + bid * blockDim.x;
-  int wid = tid / warpSize;
-  int lid = tid % warpSize;
-  int wid_g = idx / warpSize;
+  uint tid = threadIdx.x;
+  uint bid = blockIdx.x;
+  uint idx = tid + bid * blockDim.x;
+  uint wid = tid / warpSize;
+  uint lid = tid % warpSize;
+  uint wid_g = idx / warpSize;
 
   __shared__ vtype s_core_v[WARP_PER_BLOCK]; // one warp one cluster.
 
@@ -689,6 +685,7 @@ mergeKernel(
   }
   __syncwarp();
 
+  // neighbor encode should refer to core-vertex positions of old clusters.
   core_v = s_core_v[wid];
   if (core_v != UINT32_MAX)
   {
@@ -722,12 +719,12 @@ combineMultipleClustersKernel(
     vtype *query_us_compact_, offtype *cluster_offsets_,
     vtype *d_u_candidate_vs_, numtype *d_num_u_candidate_vs_)
 {
-  int tid = threadIdx.x;
-  int bid = blockIdx.x;
-  int idx = tid + bid * blockDim.x;
-  int wid = tid / warpSize;
-  int lid = tid % warpSize;
-  int wid_g = idx / warpSize;
+  uint tid = threadIdx.x;
+  uint bid = blockIdx.x;
+  uint idx = tid + bid * blockDim.x;
+  uint wid = tid / warpSize;
+  uint lid = tid % warpSize;
+  uint wid_g = idx / warpSize;
 
   __shared__ bool s_combine_type; // 0: new cluster, 1: old cluster.
   __shared__ int s_big_pos;
@@ -819,9 +816,9 @@ combineMultipleClustersKernel(
       final_value = !final_value;
       // no warp divergence here, all the threads take the same path.
       if (s_combine_type == 1)
-        d_encodings_[v * num_blocks + target_pos / ENC_SIZE] &= ~(final_value << (target_pos % ENC_SIZE));
+        atomicAnd(&d_encodings_[v * num_small_clusters + target_pos / ENC_SIZE], ~(final_value << (target_pos % ENC_SIZE)));
       else
-        d_encodings_[v * num_blocks + target_pos / ENC_SIZE] |= (final_value << (target_pos % ENC_SIZE));
+        atomicAnd(&d_encodings_[v * num_blocks + target_pos / ENC_SIZE], final_value << (target_pos % ENC_SIZE));
     }
 
     v_nbr_off += warpSize;
@@ -833,12 +830,12 @@ compactCandidatesKernel(
     vtype *d_u_candidate_vs_, numtype *d_num_u_candidate_vs_,
     vtype *d_u_candidate_vs_new_, numtype *d_num_u_candidate_vs_new_)
 {
-  int tid = threadIdx.x;
-  int bid = blockIdx.x;
-  int idx = tid + bid * blockDim.x;
-  int wid = tid / warpSize;
-  int lid = tid % warpSize;
-  int wid_g = idx / warpSize;
+  uint tid = threadIdx.x;
+  uint bid = blockIdx.x;
+  uint idx = tid + bid * blockDim.x;
+  uint wid = tid / warpSize;
+  uint lid = tid % warpSize;
+  uint wid_g = idx / warpSize;
 
   __shared__ int warp_pos[WARP_PER_BLOCK];
 
@@ -1105,12 +1102,12 @@ collectCandidatesKernel(
 
     int num_blocks)
 {
-  int tid = threadIdx.x;
-  int bid = blockIdx.x;
-  int idx = tid + bid * blockDim.x;
-  int wid = tid / warpSize;
-  int lid = tid % warpSize;
-  int wid_g = idx / warpSize;
+  uint tid = threadIdx.x;
+  uint bid = blockIdx.x;
+  uint idx = tid + bid * blockDim.x;
+  uint wid = tid / warpSize;
+  uint lid = tid % warpSize;
+  uint wid_g = idx / warpSize;
 
   __shared__ int pos_array[MAX_VQ];
   __shared__ vtype target_us[MAX_VQ];
@@ -1183,20 +1180,9 @@ void clusterFilter(
   cuchk(cudaMalloc((void **)&d_encodings_, sizeof(uint32_t) * NUM_VD * enc_meta->num_blocks));
   cuchk(cudaMemset(d_encodings_, 0, sizeof(uint32_t) * NUM_VD * enc_meta->num_blocks));
 
-  uint32_t *d_bitmap = nullptr;
-  size_t bitmap_pitch = 0;
-  cuchk(cudaMallocPitch((void **)&d_bitmap, &bitmap_pitch, sizeof(uint32_t) * row_size, NUM_VQ));
-  cuchk(cudaMemset2D(d_bitmap, bitmap_pitch, 0, sizeof(uint32_t) * row_size, NUM_VQ));
-
-  uint32_t *d_bitmap_reverse = nullptr;
-  cuchk(cudaMalloc((void **)&d_bitmap_reverse, sizeof(uint32_t) * NUM_VD));
-  cuchk(cudaMemset(d_bitmap_reverse, 0, sizeof(uint32_t) * NUM_VD));
-
   oneRoundFilterBidirection(
       hq_backup, hg,
       dq_backup, dg,
-      d_bitmap, bitmap_pitch,
-      d_bitmap_reverse,
       d_u_candidate_vs_, d_num_u_candidate_vs_,
       d_v_candidate_us_, d_num_v_candidate_us_);
 

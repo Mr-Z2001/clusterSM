@@ -3,7 +3,7 @@
 
 #include <cstdint>
 
-#define GRID_DIM 1024u
+#define GRID_DIM ((1 << 20) - 1)
 #define BLOCK_DIM 512u
 #define WARP_SIZE 32u
 #define WARP_PER_BLOCK 16u

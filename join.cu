@@ -22,12 +22,12 @@ selectPartialMatchingsKernel(
     uint32_t *d_encodings_, numtype num_blocks,
     uint32_t enc_pos_u, uint32_t enc_pos_u_matched)
 {
-  int tid = threadIdx.x;
-  int bid = blockIdx.x;
-  int idx = tid + bid * blockDim.x;
-  int wid = tid / warpSize;
-  int lid = tid % warpSize;
-  int wid_g = idx / warpSize;
+  uint tid = threadIdx.x;
+  uint bid = blockIdx.x;
+  uint idx = tid + bid * blockDim.x;
+  uint wid = tid / warpSize;
+  uint lid = tid % warpSize;
+  uint wid_g = idx / warpSize;
 
   __shared__ int warp_pos[WARP_PER_BLOCK];
   if (lid == 0)
@@ -69,9 +69,9 @@ firstJoinKernel(
     vtype *d_u_candidate_vs_, numtype num_u_candidate_vs,
     vtype *d_res_table_)
 {
-  int tid = threadIdx.x;
-  int bid = blockIdx.x;
-  int idx = tid + bid * blockDim.x;
+  uint tid = threadIdx.x;
+  uint bid = blockIdx.x;
+  uint idx = tid + bid * blockDim.x;
 
   if (idx < num_u_candidate_vs)
   {
@@ -98,12 +98,12 @@ joinOneEdgeKernel(
     int *num_candidates_in_buffer,
     bool *flag_)
 {
-  int tid = threadIdx.x;
-  int bid = blockIdx.x;
-  int idx = tid + bid * blockDim.x;
-  int wid = tid / warpSize;
-  int lid = tid % warpSize;
-  int wid_g = idx / warpSize;
+  uint tid = threadIdx.x;
+  uint bid = blockIdx.x;
+  uint idx = tid + bid * blockDim.x;
+  uint wid = tid / warpSize;
+  uint lid = tid % warpSize;
+  uint wid_g = idx / warpSize;
 
   __shared__ vtype s_v[WARP_PER_BLOCK];
 
@@ -164,11 +164,11 @@ collectMappedVs(
     bool *d_flag_,
     vtype *d_res_table_old_, numtype num_res_old)
 {
-  int tid = threadIdx.x;
-  int bid = blockIdx.x;
-  int idx = tid + bid * blockDim.x;
-  int wid = tid / warpSize;
-  int lid = tid % warpSize;
+  uint tid = threadIdx.x;
+  uint bid = blockIdx.x;
+  uint idx = tid + bid * blockDim.x;
+  uint wid = tid / warpSize;
+  uint lid = tid % warpSize;
 
   // TODO: optimize this. reduce write conflicts.
   // __shared__ vtype mapped_vs[WARP_PER_BLOCK][WARP_SIZE];
@@ -245,6 +245,9 @@ void joinOneEdge(
   cuchk(cudaMalloc((void **)&d_num_new_res, sizeof(uint32_t)));
   cuchk(cudaMemset(d_num_new_res, 0, sizeof(uint32_t)));
 
+  dim3 joe_block = 512;
+  dim3 joe_grid = (num_res_old * 32 - 1) / joe_block.x + 1;
+
   joinOneEdgeKernel<<<GRID_DIM, BLOCK_DIM>>>(
       dg->offsets_, dg->neighbors_,
       u, u_matched,
@@ -313,7 +316,9 @@ void join(
   //   std::cout << std::endl;
   // #endif
 
-  firstJoinKernel<<<GRID_DIM, BLOCK_DIM>>>(
+  dim3 fj_block = 512;
+  dim3 fj_grid = (h_num_u_candidate_vs_[u] - 1) / fj_block.x + 1;
+  firstJoinKernel<<<fj_grid, fj_block>>>(
       u,
       d_u_candidate_vs_, h_num_u_candidate_vs_[u],
       d_res_table_old_);
@@ -377,7 +382,9 @@ void join(
       //   exit(1);
       // }
 
-      selectPartialMatchingsKernel<<<GRID_DIM, BLOCK_DIM>>>(
+      dim3 spm_block = 512;
+      dim3 spm_grid = (num_res_old - 1) / spm_block.x + 1;
+      selectPartialMatchingsKernel<<<spm_grid, spm_block>>>(
           dg->offsets_, dg->neighbors_,
           u, u_matched,
           d_res_table_old_, num_res_old,

@@ -36,11 +36,20 @@ NLCFilter(
 void oneRoundFilterBidirection(
 		cpuGraph *hq, cpuGraph *hg,
 		gpuGraph *dq, gpuGraph *dg,
-		uint32_t *d_bitmap_, size_t bitmap_pitch,
-		uint32_t *d_bitmap_reverse_,
 
 		vtype *d_u_candidate_vs_, numtype *d_num_u_candidate_vs_,
 		vtype *d_v_candidate_us_, numtype *d_num_v_candidate_us_);
+
+__global__ void
+oneRoundFilterBidirectionKernel(
+		// structure info
+		vltype *query_vLabels_, degtype *query_out_degrees_,
+		offtype *d_offsets_, vtype *d_nbrs_, vltype *d_v_labels_, degtype *d_v_degrees_,
+
+		vtype *d_u_candidate_vs_, numtype *d_num_u_candidate_vs_,
+		vtype *d_v_candidate_us_, numtype *d_num_v_candidate_us_,
+
+		numtype *d_query_nlc_table_);
 
 void oneRoundFilterReverse(
 		cpuGraph *hq, cpuGraph *hg,

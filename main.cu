@@ -135,6 +135,10 @@ int main(int argc, char **argv)
 	std::cout << std::dec << std::endl;
 	std::cout << "filter done" << std::endl;
 	enc_meta.print();
+
+	for (int i = 0; i < h_num_u_candidate_vs_[3]; ++i)
+		std::cout << h_u_candidate_vs_[3 * MAX_L_FREQ + i] << " ";
+	std::cout << std::endl;
 #endif
 
 	vtype root = enc_meta.query_us_compact_[enc_meta.cluster_offsets_[enc_meta.num_clusters - 1]];
