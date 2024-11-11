@@ -17,7 +17,7 @@
 
 #define ENC_SIZE 32
 
-#define MAX_RES 100000000
+#define MAX_RES 500000000
 
 // #define MAX_CUCKOO_LOOP 64u
 // #define BUCKET_DIM 8u

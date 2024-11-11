@@ -30,37 +30,41 @@ selectPartialMatchingsKernel(
   uint32_t wid_g = idx / warpSize;
 
   __shared__ int warp_pos[WARP_PER_BLOCK];
-  if (lid == 0)
-    warp_pos[wid] = 0;
-  __syncwarp();
 
-  vtype v,
-      v_nbr;
+  vtype v, v_nbr;
 
-  bool keep = false;
-  if (idx < num_res_old)
+  int block_iter_cnt = 0;
+  int grid_size = blockDim.x * gridDim.x;
+
+  while (block_iter_cnt * grid_size < num_res_old)
   {
-    auto group = cooperative_groups::coalesced_threads();
-    v = d_res_table_old_[idx * C_NUM_VQ + u];
-    v_nbr = d_res_table_old_[idx * C_NUM_VQ + u_matched];
+    idx = tid + bid * blockDim.x + block_iter_cnt * grid_size;
+    wid_g = idx / warpSize;
 
-    for (offtype v_off = offsets_[v]; !keep && v_off < offsets_[v + 1]; ++v_off)
+    bool keep = false;
+    if (idx < num_res_old)
     {
-      keep = keep || (nbrs_[v_off] == v_nbr);
-    }
-    group.sync();
-    if (keep)
-    {
-      auto g = cooperative_groups::coalesced_threads();
-      if (g.thread_rank() == 0)
+      auto group = cooperative_groups::coalesced_threads();
+      v = d_res_table_old_[idx * C_NUM_VQ + u];
+      v_nbr = d_res_table_old_[idx * C_NUM_VQ + u_matched];
+
+      for (offtype v_off = offsets_[v]; !keep && v_off < offsets_[v + 1]; ++v_off)
+        keep = keep || (nbrs_[v_off] == v_nbr);
+      group.sync();
+
+      if (keep)
       {
-        warp_pos[wid] = atomicAdd(num_res_new, g.size());
+        auto g = cooperative_groups::coalesced_threads();
+        if (g.thread_rank() == 0)
+          warp_pos[wid] = atomicAdd(num_res_new, g.size());
+        g.sync();
+        int my_pos = warp_pos[wid] + g.thread_rank();
+        for (int i = 0; i < C_NUM_VQ; ++i)
+          d_res_table_[my_pos * C_NUM_VQ + i] = d_res_table_old_[idx * C_NUM_VQ + i];
       }
-      g.sync();
-      int my_pos = warp_pos[wid] + g.thread_rank();
-      for (int i = 0; i < C_NUM_VQ; ++i)
-        d_res_table_[my_pos * C_NUM_VQ + i] = d_res_table_old_[idx * C_NUM_VQ + i];
     }
+    __syncthreads();
+    block_iter_cnt++;
   }
 }
 __global__ void
@@ -73,10 +77,22 @@ firstJoinKernel(
   uint32_t bid = blockIdx.x;
   uint32_t idx = tid + bid * blockDim.x;
 
-  if (idx < num_u_candidate_vs)
+  int block_iter_cnt = 0;
+  int grid_size = blockDim.x * gridDim.x;
+
+  while (block_iter_cnt * grid_size < num_u_candidate_vs)
   {
-    vtype v = d_u_candidate_vs_[u * C_MAX_L_FREQ + idx];
-    d_res_table_[idx * C_NUM_VQ + u] = v;
+    idx = tid + bid * blockDim.x + block_iter_cnt * grid_size;
+
+    if (idx < num_u_candidate_vs)
+    {
+      vtype v = d_u_candidate_vs_[u * C_MAX_L_FREQ + idx];
+      d_res_table_[idx * C_NUM_VQ + u] = v;
+    }
+
+    __syncthreads();
+
+    block_iter_cnt++;
   }
 }
 
@@ -88,15 +104,9 @@ joinOneEdgeKernel(
     vtype u, vtype u_matched,
     vtype *d_res_table_old_, numtype num_res_old,
     vtype *d_res_table_, numtype *num_res_new,
-    vtype *candidate_v_buffer_,
-
-    uint32_t *v_candidate_us_, // bitmap reverse
 
     uint32_t *encodings_, numtype num_blocks,
-    int enc_pos,
-
-    int *num_candidates_in_buffer,
-    bool *flag_)
+    int enc_pos)
 {
   uint32_t tid = threadIdx.x;
   uint32_t bid = blockIdx.x;
@@ -106,55 +116,63 @@ joinOneEdgeKernel(
   uint32_t wid_g = idx / warpSize;
 
   __shared__ vtype s_v[WARP_PER_BLOCK];
+  __shared__ int warp_pos[WARP_PER_BLOCK];
 
-  // if (idx == 0)
-  // {
-  //   printf("u = %d, u_matched = %d\n", u, u_matched);
-  //   printf("num_res_old: %d\n", num_res_old);
-  //   printf("enc_pos = %d\n", enc_pos);
-  // }
-  __syncthreads();
+  int block_iter_cnt = 0;
+  int grid_size = blockDim.x * gridDim.x;
 
-  // one warp one row
-  if (wid_g < num_res_old)
+  while (block_iter_cnt * (grid_size / warpSize) < num_res_old)
   {
+    idx = tid + bid * blockDim.x + block_iter_cnt * grid_size;
+    wid_g = idx / warpSize;
+
+    // one warp one row
     if (lid == 0)
-    {
-      s_v[wid] = d_res_table_old_[wid_g * C_NUM_VQ + u_matched];
-    }
-  }
-  __syncwarp();
-  if (wid_g < num_res_old)
-  {
-    vtype v = s_v[wid];
-    int row = wid_g;
-
-    offtype v_nbr_off = offsets_[v] + lid;
-    offtype v_nbr_off_end = offsets_[v + 1];
-    while (v_nbr_off < v_nbr_off_end)
-    {
-      auto group = cooperative_groups::coalesced_threads();
-      vtype v_nbr = nbrs_[v_nbr_off];
-      // if (v_candidate_us_[v_nbr] & (1u << u))
-      if (encodings_[v_nbr * num_blocks + enc_pos / ENC_SIZE] & (1u << (enc_pos % ENC_SIZE)))
-      {
-        bool same_flag = false;
-        for (int i = 0; i < C_NUM_VQ; ++i)
-        {
-          same_flag = same_flag || ((d_res_table_old_[row * C_NUM_VQ + i] == v_nbr));
-        }
-        if (!same_flag)
-        {
-          int pos = atomicAdd(num_res_new, 1);
-          for (int i = 0; i < C_NUM_VQ; ++i)
-            d_res_table_[pos * C_NUM_VQ + i] = d_res_table_old_[row * C_NUM_VQ + i];
-          d_res_table_[pos * C_NUM_VQ + u] = v_nbr;
-        }
-      }
-      group.sync();
-      v_nbr_off += warpSize;
-    }
+      if (wid_g < num_res_old)
+        s_v[wid] = d_res_table_old_[wid_g * C_NUM_VQ + u_matched];
+      else
+        s_v[wid] = UINT32_MAX;
     __syncwarp();
+
+    if (wid_g < num_res_old && s_v[wid] != UINT32_MAX)
+    {
+      vtype v = s_v[wid];
+      int row = wid_g;
+
+      offtype v_nbr_off = offsets_[v] + lid;
+      offtype v_nbr_off_end = offsets_[v + 1];
+      while (v_nbr_off < v_nbr_off_end)
+      {
+        auto group = cooperative_groups::coalesced_threads();
+        vtype v_nbr = nbrs_[v_nbr_off];
+        // if (v_candidate_us_[v_nbr] & (1u << u))
+        if (encodings_[v_nbr * num_blocks + enc_pos / ENC_SIZE] & (1u << (enc_pos % ENC_SIZE)))
+        {
+          bool same_flag = false;
+          for (int i = 0; i < C_NUM_VQ; ++i)
+          {
+            same_flag = same_flag || ((d_res_table_old_[row * C_NUM_VQ + i] == v_nbr));
+          }
+          if (!same_flag)
+          {
+            auto g = cooperative_groups::coalesced_threads();
+            if (g.thread_rank() == 0)
+              warp_pos[wid] = atomicAdd(num_res_new, g.size());
+            g.sync();
+            int pos = warp_pos[wid] + g.thread_rank();
+            for (int i = 0; i < C_NUM_VQ; ++i)
+              d_res_table_[pos * C_NUM_VQ + i] = d_res_table_old_[row * C_NUM_VQ + i];
+            d_res_table_[pos * C_NUM_VQ + u] = v_nbr;
+          }
+        }
+        group.sync();
+        v_nbr_off += warpSize;
+      }
+      __syncwarp();
+    }
+    __syncthreads();
+
+    block_iter_cnt++;
   }
 }
 
@@ -210,7 +228,7 @@ void joinOneEdge(
 
     encodingMeta *enc_meta)
 {
-  bool *d_flag_;
+  bool *d_flag_ = nullptr;
   num_res_new = 0;
 
   cuchk(cudaMalloc((void **)&d_flag_, sizeof(bool) * NUM_VD));
@@ -246,19 +264,16 @@ void joinOneEdge(
   cuchk(cudaMemset(d_num_new_res, 0, sizeof(uint32_t)));
 
   dim3 joe_block = 512;
-  dim3 joe_grid = (num_res_old * 32 - 1) / joe_block.x + 1;
+  int N = num_res_old * 32;
+  dim3 joe_grid = std::min(GRID_DIM, calc_grid_dim(N, joe_block.x));
 
-  joinOneEdgeKernel<<<GRID_DIM, BLOCK_DIM>>>(
+  joinOneEdgeKernel<<<joe_grid, joe_block>>>(
       dg->offsets_, dg->neighbors_,
       u, u_matched,
       d_res_table_old_, num_res_old,
       d_res_table_, d_num_new_res,
-      d_candidate_v_buffer_,
-      d_v_candidate_us_,
       d_encodings_, enc_meta->num_blocks,
-      enc_pos,
-      d_num_candidates_in_buffer,
-      d_flag_);
+      enc_pos);
   cuchk(cudaDeviceSynchronize());
 
   cuchk(cudaMemcpy(&num_res_new, d_num_new_res, sizeof(uint32_t), cudaMemcpyDeviceToHost));
@@ -295,11 +310,11 @@ void join(
   // make sure all the swap operations are done in this function, not inside sub-functions.
 
   numtype num_res_old = 0;
-  vtype *d_res_table_;
+  vtype *d_res_table_ = nullptr;
   cuchk(cudaMalloc((void **)&d_res_table_, sizeof(vtype) * NUM_VQ * MAX_RES));
   cuchk(cudaMemset(d_res_table_, -1, sizeof(vtype) * NUM_VQ * MAX_RES));
 
-  vtype *d_res_table_old_;
+  vtype *d_res_table_old_ = nullptr;
   cuchk(cudaMalloc((void **)&d_res_table_old_, sizeof(vtype) * NUM_VQ * MAX_RES));
   cuchk(cudaMemset(d_res_table_old_, -1, sizeof(vtype) * NUM_VQ * MAX_RES));
 
@@ -317,7 +332,7 @@ void join(
   // #endif
 
   dim3 fj_block = 512;
-  dim3 fj_grid = (h_num_u_candidate_vs_[u] - 1) / fj_block.x + 1;
+  dim3 fj_grid = std::min(GRID_DIM, calc_grid_dim(h_num_u_candidate_vs_[u], fj_block.x));
   firstJoinKernel<<<fj_grid, fj_block>>>(
       u,
       d_u_candidate_vs_, h_num_u_candidate_vs_[u],
@@ -383,7 +398,8 @@ void join(
       // }
 
       dim3 spm_block = 512;
-      dim3 spm_grid = (num_res_old - 1) / spm_block.x + 1;
+      int N = num_res_old;
+      dim3 spm_grid = std::min(GRID_DIM, calc_grid_dim(N, spm_block.x));
       selectPartialMatchingsKernel<<<spm_grid, spm_block>>>(
           dg->offsets_, dg->neighbors_,
           u, u_matched,
@@ -394,6 +410,9 @@ void join(
           enc_pos_u, enc_pos_u_matched);
       cuchk(cudaDeviceSynchronize());
       cuchk(cudaMemcpy(&num_res, d_num_res_new, sizeof(int), cudaMemcpyDeviceToHost));
+#ifndef NDEBUG
+      std::cout << "After selectPartialMatchingsKernel, num_res: " << num_res << std::endl;
+#endif
     }
     std::swap(d_res_table_old_, d_res_table_);
     num_res_old = num_res;
